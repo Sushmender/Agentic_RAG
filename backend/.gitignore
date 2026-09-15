@@ -1,0 +1,48 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment secrets
+.env
+!.env.example
+
+# Data directories (not committed)
+data/uploads/
+data/ade_outputs/
+data/chroma_db/
+data/telemetry.jsonl
+data/gold_dataset.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Linting and Typing
+.mypy_cache/
+.ruff_cache/
