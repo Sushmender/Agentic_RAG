@@ -251,6 +251,7 @@
   - Return structured `{ answer, sources, model_used, provider_used }`
 - [ ] Complete `POST /query` endpoint — full pipeline:
   - Route → Embed query → Retrieve Top-N → Rerank → Assemble context → Generate → Return grounded response
+  - Support `llm_provider` selection from `QueryRequest` (default Groq, fallback OpenRouter if requested)
   - Response: `{ answer, sources: [{ document_id, chunk_id, page, bbox, chunk_type }], latency_ms, model_used }`
 - [ ] Create `backend/tests/test_query_pipeline.py` — integration test for full pipeline
 
@@ -259,6 +260,7 @@
 - [ ] Display source cards below answer: document name, page number, chunk type badge
 - [ ] Show `bbox` as text coordinates (visual highlight reserved for Day 8)
 - [ ] Show model used (Groq/Qwen or OpenRouter/Nemotron) and latency
+- [ ] Add dropdown in `QueryPage.jsx` to allow user to select between Qwen 32B (Groq) and Nemotron 120B (OpenRouter)
 
 ### Verification
 - [ ] `POST /query` returns `{ answer, sources }` with correct schema
