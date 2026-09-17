@@ -49,14 +49,15 @@ class Settings(BaseSettings):
     # ── OpenRouter ───────────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key")
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2"
-    RERANKER_MODEL: str = "nvidia/llama-nemotron-rerank-vl-1b-v2"
+    EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    RERANKER_MODEL: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
     FALLBACK_LLM_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
     # ── Groq (Primary LLM) ───────────────────────────────────────────────────
     GROQ_API_KEY: str = Field(default="", description="Groq API key")
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    PRIMARY_LLM_MODEL: str = "qwen-qwq-32b"
+    PRIMARY_LLM_MODEL: str = "qwen/qwen3.8-27b"
+    SECONDARY_LLM_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
     # ── Redis (Upstash) ──────────────────────────────────────────────────────
     REDIS_URL: str = Field(default="redis://localhost:6379", description="Redis connection URL (rediss:// for Upstash TLS)")
