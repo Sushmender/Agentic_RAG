@@ -1,5 +1,6 @@
-/* frontend/src/pages/DocumentsPage.css */
+/* frontend/src/pages/DocumentsPage.css — Day 1 full implementation */
 
+/* ── Page layout ─────────────────────────────────────────────────────────────── */
 .page {
   padding: 2rem;
   max-width: 1100px;
@@ -22,36 +23,57 @@
   font-size: 0.9rem;
 }
 
+/* ── Upload zone ─────────────────────────────────────────────────────────────── */
 .upload-zone {
-  border: 2px dashed rgba(99, 102, 241, 0.35);
+  border: 2px dashed rgba(99, 102, 241, 0.4);
   border-radius: 16px;
   padding: 2.5rem;
   text-align: center;
-  background: rgba(99, 102, 241, 0.03);
+  background: rgba(99, 102, 241, 0.04);
   margin-bottom: 2rem;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s;
+  cursor: pointer;
+  outline: none;
 }
 
 .upload-zone:hover {
-  border-color: rgba(99, 102, 241, 0.6);
+  border-color: rgba(99, 102, 241, 0.7);
+  background: rgba(99, 102, 241, 0.07);
 }
 
-.upload-zone-inner {
+.upload-zone--active {
+  border-color: #818cf8;
+  background: rgba(99, 102, 241, 0.12);
+  transform: scale(1.01);
+}
+
+.upload-zone--uploading {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.upload-zone__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.6rem;
 }
 
 .upload-icon {
   font-size: 3rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  transition: transform 0.2s;
+}
+
+.upload-zone:hover .upload-icon {
+  transform: translateY(-3px);
 }
 
 .upload-label {
   font-size: 1rem;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
   margin: 0;
+  font-weight: 500;
 }
 
 .upload-hint {
@@ -61,38 +83,58 @@
 }
 
 .upload-btn {
-  margin-top: 1rem;
-  padding: 0.6rem 1.5rem;
+  margin-top: 0.75rem;
+  padding: 0.55rem 1.4rem;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   border: none;
   border-radius: 8px;
   color: #fff;
-  font-size: 0.9rem;
+  font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: opacity 0.2s, transform 0.15s;
+}
+
+.upload-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
 }
 
 .upload-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
-.upload-coming-soon {
-  margin-top: 1rem;
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.3);
-  font-style: italic;
+/* Upload progress bar */
+.upload-progress-bar {
+  width: 280px;
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 0.5rem;
 }
 
+.upload-progress-bar__fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* ── Document list ───────────────────────────────────────────────────────────── */
 .document-list {
   background: rgba(15, 15, 30, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
 .document-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -101,23 +143,266 @@
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
 }
 
+.doc-count {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.35);
+  background: rgba(255,255,255,0.05);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+}
+
+/* ── Document cards ──────────────────────────────────────────────────────────── */
+.doc-card-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.15s;
+}
+
+.doc-card:last-child {
+  border-bottom: none;
+}
+
+.doc-card:hover {
+  background: rgba(255,255,255,0.02);
+}
+
+.doc-card--processing {
+  background: rgba(245, 158, 11, 0.03);
+}
+
+.doc-card--failed {
+  background: rgba(239, 68, 68, 0.03);
+}
+
+.doc-card__icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+  width: 2.5rem;
+  text-align: center;
+}
+
+.doc-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.doc-card__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  color: rgba(255,255,255,0.38);
+}
+
+.doc-card__version {
+  font-family: 'Courier New', monospace;
+  font-size: 0.72rem;
+  background: rgba(99,102,241,0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  color: #818cf8;
+}
+
+.doc-card__error {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: #f87171;
+  background: rgba(239,68,68,0.07);
+  border-left: 2px solid #ef4444;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.doc-card__progress {
+  margin-top: 0.5rem;
+}
+
+.progress-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 280px;
+}
+
+.progress-bar__fill--animated {
+  height: 100%;
+  width: 60%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6, #6366f1);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+  border-radius: 2px;
+}
+
+.doc-card__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.doc-card__query-btn {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #818cf8;
+  background: rgba(99,102,241,0.1);
+  border: 1px solid rgba(99,102,241,0.25);
+  border-radius: 6px;
+  padding: 0.25rem 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.doc-card__query-btn:hover {
+  background: rgba(99,102,241,0.2);
+  color: #c7d2fe;
+}
+
+/* ── Empty / loading states ──────────────────────────────────────────────────── */
 .empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
-  padding: 3rem;
-  color: rgba(255, 255, 255, 0.4);
+  gap: 0.5rem;
+  padding: 3.5rem 2rem;
+  color: rgba(255, 255, 255, 0.35);
 }
 
 .empty-icon {
   font-size: 2.5rem;
+  margin-bottom: 0.25rem;
 }
 
 .empty-state p {
   margin: 0;
+  font-size: 0.95rem;
+}
+
+.empty-hint {
+  font-size: 0.8rem !important;
+  color: rgba(255,255,255,0.25) !important;
+}
+
+.doc-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem;
+  color: rgba(255,255,255,0.4);
   font-size: 0.9rem;
+}
+
+.spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(99,102,241,0.2);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Toast notifications ─────────────────────────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 9999;
+  max-width: 380px;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.toast--success {
+  background: rgba(34,197,94,0.12);
+  border: 1px solid rgba(34,197,94,0.3);
+  color: #86efac;
+}
+
+.toast--error {
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: #fca5a5;
+}
+
+.toast__close {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.toast__close:hover {
+  opacity: 1;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .page {
+    padding: 1rem;
+  }
+
+  .doc-card {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .doc-card__right {
+    flex-direction: row;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .toast-container {
+    left: 1rem;
+    right: 1rem;
+    max-width: unset;
+  }
 }
