@@ -43,8 +43,8 @@ class Settings(BaseSettings):
 
     # ── LandingAI ADE ────────────────────────────────────────────────────────
     LANDINGAI_API_KEY: str = Field(default="", description="LandingAI ADE API key")
-    LANDINGAI_API_URL: str = "https://api.landing.ai/v1/tools/document-analysis"
-    ADE_TIER: str = "verity"  # always DPT-3 Verity (cost-optimized)
+    LANDINGAI_API_URL: str = "https://api.va.landing.ai/v1/ade/parse"  # GA endpoint
+    ADE_MODEL: str = "dpt-2-latest"  # user-selectable: dpt-2-latest | dpt-3-pro
 
     # ── OpenRouter ───────────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key")

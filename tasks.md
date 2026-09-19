@@ -66,51 +66,50 @@
 ## Day 1 — Document Upload + Async Ingestion + Job Tracking
 
 ### Backend
-- [ ] Implement `POST /documents/upload` — accept multipart file, validate MIME type (PDF/DOCX/PPTX/XLSX/PNG/JPG), enforce `MAX_UPLOAD_SIZE_MB`
-- [ ] Generate stable `document_id` = `SHA-256(file_content)` — same file → same ID (idempotency)
-- [ ] Save uploaded file to `data/uploads/{document_id}/{original_filename}`
-- [ ] Create `Document` metadata record on upload: `document_id`, `filename`, `document_type`, `version`, `created_at`, `status=pending`, `source`, `parser_version=None`
-- [ ] Create `Job` record tied to `document_id` with `status=pending`
-- [ ] Launch async ingestion via `FastAPI.BackgroundTasks` — `POST /documents/upload` returns immediately with `document_id` + `job_id`
-- [ ] Create `backend/app/services/ingestion_service.py` — async ingestion coordinator: update job to `processing`, call ADE stub, update job to `completed` or `failed`
-- [ ] Create in-memory `DocumentStore` and `JobStore` (dict-based, keyed by ID) — to be replaced in Day 7
-- [ ] Implement `GET /documents/{document_id}` — return `Document` metadata or `404`
-- [ ] Implement `GET /jobs/{job_id}` — return `Job` with status or `404`
-- [ ] Implement `GET /documents/` — list all documents with status
-- [ ] Log job status transitions with `structlog` including `document_id`, `job_id`, `status`, timestamp
-- [ ] Create `backend/tests/test_ingestion.py` — test upload, idempotency (same file → same document_id), job creation, status polling
+- [x] Implement `POST /documents/upload` — accept multipart file, validate MIME type (PDF/DOCX/PPTX/XLSX/PNG/JPG), enforce `MAX_UPLOAD_SIZE_MB`
+- [x] Generate stable `document_id` = `SHA-256(file_content)` — same file → same ID (idempotency)
+- [x] Save uploaded file to `data/uploads/{document_id}/{original_filename}`
+- [x] Create `Document` metadata record on upload: `document_id`, `filename`, `document_type`, `version`, `created_at`, `status=pending`, `source`, `parser_version=None`
+- [x] Create `Job` record tied to `document_id` with `status=pending`
+- [x] Launch async ingestion via `FastAPI.BackgroundTasks` — `POST /documents/upload` returns immediately with `document_id` + `job_id`
+- [x] Create `backend/app/services/ingestion_service.py` — async ingestion coordinator: update job to `processing`, call ADE stub, update job to `completed` or `failed`
+- [x] Create in-memory `DocumentStore` and `JobStore` (dict-based, keyed by ID) — to be replaced in Day 7
+- [x] Implement `GET /documents/{document_id}` — return `Document` metadata or `404`
+- [x] Implement `GET /jobs/{job_id}` — return `Job` with status or `404`
+- [x] Implement `GET /documents/` — list all documents with status
+- [x] Log job status transitions with `structlog` including `document_id`, `job_id`, `status`, timestamp
+- [x] Create `backend/tests/test_ingestion.py` — test upload, idempotency (same file → same document_id), job creation, status polling
 
 ### Frontend
-- [ ] Implement drag-and-drop upload form in `DocumentsPage.jsx` using `react-dropzone`
-- [ ] Show upload progress indicator
-- [ ] After upload, poll `GET /jobs/{job_id}` every 2 seconds until `completed` or `failed`
-- [ ] Display document list with `status` badge (color-coded: pending=gray, processing=yellow, completed=green, failed=red)
-- [ ] Display error messages from failed jobs
-- [ ] Navigate to `/query` when a document completes
+- [x] Implement drag-and-drop upload form in `DocumentsPage.jsx` using `react-dropzone`
+- [x] Show upload progress indicator
+- [x] After upload, poll `GET /jobs/{job_id}` every 2 seconds until `completed` or `failed`
+- [x] Display document list with `status` badge (color-coded: pending=gray, processing=yellow, completed=green, failed=red)
+- [x] Display error messages from failed jobs
+- [x] Navigate to `/query` when a document completes
 
 ### Verification
-- [ ] Upload a PDF → response contains `document_id` and `job_id`
-- [ ] Same PDF uploaded twice → same `document_id`, no duplicate job (idempotent)
-- [ ] `GET /jobs/{job_id}` transitions from `pending` → `processing` → `completed`
-- [ ] `GET /documents/{document_id}` returns correct metadata
-- [ ] `GET /documents/` lists uploaded documents
-- [ ] Frontend upload form uploads file and shows real-time status
-- [ ] `pytest backend/tests/test_ingestion.py` passes
+- [x] Upload a PDF → response contains `document_id` and `job_id`
+- [x] Same PDF uploaded twice → same `document_id`, no duplicate job (idempotent)
+- [x] `GET /jobs/{job_id}` transitions from `pending` → `processing` → `completed`
+- [x] `GET /documents/{document_id}` returns correct metadata
+- [x] `GET /documents/` lists uploaded documents
+- [x] Frontend upload form uploads file and shows real-time status
+- [x] `pytest backend/tests/test_ingestion.py` passes
 
 ---
 
 ## Day 2 — ADE Integration + Multimodal Chunk Normalization
 
 ### Backend
-- [ ] Implement `backend/app/providers/ade.py` — real LandingAI ADE Parse API integration:
-  - HTTP call to ADE Parse API with document binary
-  - Use **DPT-3 Verity** tier for clean/digital documents by default
-  - Use **DPT-3 Pro** tier as fallback for scanned/complex documents
+- [x] Implement `backend/app/providers/ade.py` — real LandingAI ADE Parse API integration:
+  - HTTP call to ADE Parse API with document binary (field name: `document`)
+  - Use **dpt-2-latest** (cost-optimized) or **dpt-3-pro** (high accuracy) — switchable via `ADE_MODEL` in `.env`
   - Track ADE credit consumption per call
   - Retry on ADE API failures using `tenacity`
-- [ ] Idempotent ADE: check if `data/ade_outputs/{document_id}/chunks.json` exists — skip API call if so
-- [ ] Persist ADE output: save raw JSON to `data/ade_outputs/{document_id}/raw.json`, save processed markdown to `data/ade_outputs/{document_id}/document.md`
-- [ ] Create `backend/app/services/chunking_service.py` — normalize ADE output into production `Chunk` schema:
+- [x] Idempotent ADE: check if `data/ade_outputs/{document_id}/chunks.json` exists — skip API call if so
+- [x] Persist ADE output: save raw JSON to `data/ade_outputs/{document_id}/raw.json`, save processed markdown to `data/ade_outputs/{document_id}/document.md`
+- [x] Create `backend/app/services/chunking_service.py` — normalize ADE output into production `Chunk` schema:
   - Map ADE `chunk_type` → `ChunkType` enum (text/table/figure)
   - Preserve `bbox [x0, y0, x1, y1]` (normalized 0–1)
   - Preserve `page` (0-indexed)
@@ -118,24 +117,27 @@
   - Generate stable `chunk_id` = `SHA-256(document_id + page + str(bbox) + chunk_type)`
   - Filter out empty/whitespace-only chunks
   - DO NOT flatten tables/figures to plain text — preserve original content
-- [ ] Save normalized chunks to `data/ade_outputs/{document_id}/chunks.json`
-- [ ] Update `Document` metadata: `parser_version`, `status=completed`, chunk count
-- [ ] Log ADE credit usage per document in structured log
-- [ ] Create `backend/tests/test_chunking.py` — test chunk normalization, idempotency, empty chunk filtering
+  - Preserve `ade_chunk_id` and `confidence` from grounding map
+- [x] Save normalized chunks to `data/ade_outputs/{document_id}/chunks.json`
+- [x] Update `Document` metadata: `parser_version`, `status=completed`, `chunk_count`, `ade_credits_used`
+- [x] Log ADE credit usage per document in structured log
+- [x] Create `backend/tests/test_chunking.py` — test chunk normalization, idempotency, empty chunk filtering
 
 ### Frontend
-- [ ] Display chunk count on document card after ingestion completes
-- [ ] Add "View Details" to document card showing: filename, type, pages, chunk count, parser version
-- [ ] Add ADE credit indicator (show credits used if available from API response)
+- [x] Display chunk count on document card after ingestion completes
+- [x] Add "View Details" to document card showing: filename, type, chunk count, parser version, ADE credits used, document ID
+- [x] Add ADE credit indicator (show credits used from API response)
 
 ### Verification
-- [ ] Upload PDF → ADE called → `data/ade_outputs/{document_id}/chunks.json` created
-- [ ] Same document uploaded again → ADE NOT called again (idempotency verified via logs)
-- [ ] Chunks have correct schema: `chunk_id`, `document_id`, `chunk_type`, `text`, `page`, `bbox`, `source`, `parser_version`
-- [ ] Table chunks NOT flattened — HTML/markdown table content preserved in `text`
-- [ ] Figure chunks have description or placeholder text preserved
-- [ ] `pytest backend/tests/test_chunking.py` passes
-- [ ] Frontend shows chunk count on document card
+- [x] Upload PDF → ADE called → `data/ade_outputs/{document_id}/chunks.json` created
+- [x] Same document uploaded again → ADE NOT called again (idempotency verified via logs — "ADE cache hit")
+- [x] Chunks have correct schema: `chunk_id`, `document_id`, `chunk_type`, `text`, `page`, `bbox`, `source`, `parser_version`, `ade_chunk_id`, `confidence`
+- [x] Table chunks NOT flattened — HTML/markdown table content preserved in `text` (verified with `2_table_budget_report.pdf`)
+- [x] Figure chunks have description or placeholder text preserved
+- [x] `pytest backend/tests/test_chunking.py` passes (13/13)
+- [x] `pytest backend/tests/test_ingestion.py` passes (21/21, ADE mocked)
+- [x] Frontend shows chunk count on document card
+- [x] Manual verification: `2_table_budget_report.pdf` → 3 chunks (1 text + 2 tables), confidence 0.967–1.0, 3.0 credits
 
 ---
 

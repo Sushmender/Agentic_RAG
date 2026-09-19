@@ -48,6 +48,16 @@ class Chunk(BaseModel):
         description="Base64 image data for visual chunk types (figure, table with visual)"
     )
 
+    # ADE provenance — preserved for future UI grounding features
+    ade_chunk_id: Optional[str] = Field(
+        default=None,
+        description="ADE's own UUID for this chunk (links back to ADE grounding map)"
+    )
+    confidence: Optional[float] = Field(
+        default=None,
+        description="ADE extraction confidence score (0-1) for this chunk"
+    )
+
     class Config:
         use_enum_values = True
 

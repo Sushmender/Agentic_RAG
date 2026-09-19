@@ -1,9 +1,10 @@
 /**
  * frontend/src/pages/DocumentsPage.jsx
- * Day 1 — Full implementation:
+ * Day 1+2 — Full implementation:
  *   - Drag-and-drop upload via react-dropzone
  *   - Upload progress + job status polling (2s interval)
  *   - Document list with color-coded status badges
+ *   - View Details panel: chunk count, chunk types, ADE credits, parser version
  *   - Empty state, error toasts, "Query" navigation
  */
 
@@ -30,18 +31,23 @@ function StatusBadge({ status }) {
 
 // ── Document card ──────────────────────────────────────────────────────────────
 function DocumentCard({ doc, onQuery }) {
+  const [expanded, setExpanded] = useState(false);
   const sizeKB = (doc.file_size_bytes / 1024).toFixed(1);
+
+  const docIcon =
+    doc.document_type === 'pdf'  ? '📄' :
+    doc.document_type === 'docx' ? '📝' :
+    doc.document_type === 'pptx' ? '📊' :
+    doc.document_type === 'xlsx' ? '📈' : '🖼️';
 
   return (
     <div className={`doc-card doc-card--${doc.status} animate-fade-in`}>
-      <div className="doc-card__icon">
-        {doc.document_type === 'pdf' ? '📄' :
-         doc.document_type === 'docx' ? '📝' :
-         doc.document_type === 'pptx' ? '📊' :
-         doc.document_type === 'xlsx' ? '📈' : '🖼️'}
-      </div>
+      <div className="doc-card__icon">{docIcon}</div>
+
       <div className="doc-card__body">
         <div className="doc-card__name">{doc.filename}</div>
+
+        {/* ── Primary meta row ── */}
         <div className="doc-card__meta">
           <span>{doc.document_type?.toUpperCase()}</span>
           <span>·</span>
@@ -49,7 +55,7 @@ function DocumentCard({ doc, onQuery }) {
           {doc.chunk_count > 0 && (
             <>
               <span>·</span>
-              <span>{doc.chunk_count} chunks</span>
+              <span className="doc-card__chunks">🧩 {doc.chunk_count} chunks</span>
             </>
           )}
           {doc.parser_version && (
@@ -58,10 +64,20 @@ function DocumentCard({ doc, onQuery }) {
               <span className="doc-card__version">{doc.parser_version}</span>
             </>
           )}
+          {doc.ade_credits_used > 0 && (
+            <>
+              <span>·</span>
+              <span className="doc-card__credits">💳 {doc.ade_credits_used.toFixed(1)} credits</span>
+            </>
+          )}
         </div>
+
+        {/* ── Error message ── */}
         {doc.error_message && (
           <div className="doc-card__error">{doc.error_message}</div>
         )}
+
+        {/* ── Processing progress bar ── */}
         {doc.status === 'processing' && (
           <div className="doc-card__progress">
             <div className="progress-bar">
@@ -69,7 +85,72 @@ function DocumentCard({ doc, onQuery }) {
             </div>
           </div>
         )}
+
+        {/* ── Expandable View Details ── */}
+        {doc.status === 'completed' && (
+          <div className="doc-card__details">
+            <button
+              className="doc-card__details-toggle"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+            >
+              {expanded ? '▲ Hide Details' : '▼ View Details'}
+            </button>
+
+            {expanded && (
+              <div className="doc-card__details-panel animate-fade-in">
+                <div className="details-grid">
+                  <div className="details-item">
+                    <span className="details-label">Filename</span>
+                    <span className="details-value">{doc.filename}</span>
+                  </div>
+                  <div className="details-item">
+                    <span className="details-label">File Type</span>
+                    <span className="details-value">{doc.document_type?.toUpperCase()}</span>
+                  </div>
+                  <div className="details-item">
+                    <span className="details-label">File Size</span>
+                    <span className="details-value">{sizeKB} KB</span>
+                  </div>
+                  {doc.chunk_count > 0 && (
+                    <div className="details-item">
+                      <span className="details-label">Total Chunks</span>
+                      <span className="details-value details-value--highlight">
+                        🧩 {doc.chunk_count}
+                      </span>
+                    </div>
+                  )}
+                  {doc.parser_version && (
+                    <div className="details-item">
+                      <span className="details-label">Parser Version</span>
+                      <span className="details-value details-value--code">{doc.parser_version}</span>
+                    </div>
+                  )}
+                  {doc.ade_credits_used > 0 && (
+                    <div className="details-item">
+                      <span className="details-label">ADE Credits Used</span>
+                      <span className="details-value details-value--credits">
+                        💳 {doc.ade_credits_used.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="details-item">
+                    <span className="details-label">Document ID</span>
+                    <span className="details-value details-value--mono details-value--truncate">
+                      {doc.document_id.slice(0, 16)}…
+                    </span>
+                  </div>
+                  <div className="details-item">
+                    <span className="details-label">Status</span>
+                    <span className="details-value"><StatusBadge status={doc.status} /></span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
       <div className="doc-card__right">
         <StatusBadge status={doc.status} />
         {doc.status === 'completed' && (

@@ -269,16 +269,57 @@ class TestGetJob:
         After upload the job should eventually reach processing or completed.
         Since ingestion is synchronous in TestClient (BackgroundTasks run inline),
         the job should be completed immediately after the upload response.
+        ADE provider is mocked so no live API calls are made in tests.
         """
-        token = _register_and_login()
-        pdf_bytes = b"%PDF-1.4 completion test " + uuid.uuid4().bytes
-        upload_resp = _upload_pdf(token, content=pdf_bytes)
-        job_id = upload_resp.json()["job_id"]
+        from unittest.mock import AsyncMock, patch
 
-        # TestClient runs background tasks synchronously
+        mock_ade_result = {
+            "chunks": [
+                {
+                    "id": "test-chunk-001",
+                    "type": "text",
+                    "markdown": "<a id='test-chunk-001'></a>\n\nTest content from mock ADE",
+                    "grounding": {
+                        "box": {"left": 0.1, "top": 0.1, "right": 0.9, "bottom": 0.2},
+                        "page": 0,
+                    },
+                }
+            ],
+            "markdown": "Test content from mock ADE",
+            "metadata": {
+                "credit_usage": 1.0,
+                "version": "dpt-2-test",
+                "page_count": 1,
+                "job_id": "mock-ade-job",
+                "duration_ms": 100,
+                "failed_pages": [],
+                "filename": "test.pdf",
+            },
+            "grounding": {
+                "test-chunk-001": {
+                    "box": {"left": 0.1, "top": 0.1, "right": 0.9, "bottom": 0.2},
+                    "page": 0,
+                    "type": "chunkText",
+                    "confidence": 0.99,
+                    "low_confidence_spans": [],
+                }
+            },
+            "splits": [],
+        }
+
+        with patch(
+            "app.services.ingestion_service.ade_provider.parse_document",
+            new_callable=AsyncMock,
+            return_value=mock_ade_result,
+        ):
+            token = _register_and_login()
+            pdf_bytes = b"%PDF-1.4 completion test " + uuid.uuid4().bytes
+            upload_resp = _upload_pdf(token, content=pdf_bytes)
+            job_id = upload_resp.json()["job_id"]
+
+        # TestClient runs background tasks synchronously → completed
         resp = client.get(f"/api/v1/jobs/{job_id}", headers=_auth_headers(token))
         assert resp.status_code == 200
         status = resp.json()["status"]
-        # With TestClient, background tasks run synchronously → completed
         assert status in ("completed", "processing", "pending"), \
             f"Unexpected status: {status}"
