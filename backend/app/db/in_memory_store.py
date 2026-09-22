@@ -54,6 +54,7 @@ class DocumentStore:
         chunk_count: int | None = None,
         parser_version: str | None = None,
         ade_credits_used: float | None = None,
+        embedding_model: str | None = None,
         error_message: str | None = None,
     ) -> None:
         """Mutate status fields on an existing document record."""
@@ -69,6 +70,8 @@ class DocumentStore:
             doc.parser_version = parser_version
         if ade_credits_used is not None:
             doc.ade_credits_used = ade_credits_used
+        if embedding_model is not None:
+            doc.embedding_model = embedding_model
         if error_message is not None:
             doc.error_message = error_message
 

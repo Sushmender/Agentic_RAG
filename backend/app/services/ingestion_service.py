@@ -2,7 +2,7 @@
 backend/app/services/ingestion_service.py
 Async ingestion coordinator — runs as a FastAPI BackgroundTask.
 
-Pipeline (Day 2):
+Pipeline (Day 3):
   1. pending → processing
   2. Idempotency check: if chunks.json already exists → skip ADE + re-use
   3. Call real ADE provider → get raw result
@@ -11,7 +11,8 @@ Pipeline (Day 2):
   6. Normalize chunks  → chunking_service.normalize_chunks()
   7. Persist chunks    → data/ade_outputs/{document_id}/chunks.json
   8. Update document metadata (parser_version, chunk_count, ade_credits_used)
-  9. → completed | failed
+  9. Embed new chunks  → embedding_service.index_chunks(document_id)
+ 10. → completed | failed
 
 State machine: pending → processing → completed | failed
 All transitions are logged with structlog: document_id, job_id, status, timestamp.
@@ -30,6 +31,7 @@ from app.providers.ade import ade_provider
 from app.schemas.document import DocumentStatus
 from app.schemas.job import JobStatus
 from app.services.chunking_service import normalize_chunks, parse_ade_metadata
+from app.services import embedding_service
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -45,18 +47,16 @@ async def run_ingestion(
     """
     Async ingestion coordinator. Called via FastAPI BackgroundTasks.
 
-    Steps (Day 2):
+    Steps (Day 3):
       1. Mark job → processing
       2. Idempotency: skip ADE if chunks.json already exists
       3. Call real ADE provider
       4. Persist raw.json, document.md
       5. Normalize chunks via chunking_service
       6. Persist chunks.json
-      7. Update Document + Job → completed
+      7. Embed new chunks via embedding_service.index_chunks()
+      8. Update Document + Job → completed
       On any exception: mark job + document → failed, log error
-
-    Steps added in later days:
-      Day 3: embedding_service.index_chunks(document_id)
     """
     log = logger.bind(document_id=document_id, job_id=job_id, user_id=user_id)
     ade_output_dir = Path(settings.ADE_OUTPUT_DIR) / document_id
@@ -154,16 +154,43 @@ async def run_ingestion(
                 chunk_count=len(chunk_dicts),
             )
 
-        # ── Step 7: Mark completed ─────────────────────────────────────────────
+        # ── Step 7: Collect chunk metadata for completion ───────────────────────
         chunk_count = len(chunk_dicts)
         parser_version = ade_meta.get("parser_version", "unknown")
         credits_used = float(ade_meta.get("credit_usage", 0.0))
 
+        log.info(
+            "Chunking complete",
+            chunk_count=chunk_count,
+            credits_used=credits_used,
+            parser_version=parser_version,
+        )
+
+        # ── Step 9: Embed new chunks into ChromaDB ───────────────────────────
+        job_store.update_status(
+            job_id,
+            JobStatus.PROCESSING,
+            progress_message="Embedding chunks into ChromaDB",
+        )
+        embedding_result = await embedding_service.index_chunks(document_id)
+        log.info(
+            "Embedding step complete",
+            new_chunks_indexed=embedding_result.new_chunks_indexed,
+            skipped_chunks=embedding_result.skipped_chunks,
+            embedding_model=embedding_result.embedding_model,
+            latency_ms=embedding_result.latency_ms,
+        )
+
+        # ── Step 10: Mark completed ──────────────────────────────────────────
         job_store.update_status(
             job_id,
             JobStatus.COMPLETED,
-            progress_message=f"Ingestion complete — {chunk_count} chunks created",
+            progress_message=(
+                f"Ingestion complete — {chunk_count} chunks created, "
+                f"{embedding_result.new_chunks_indexed} embedded"
+            ),
             chunks_created=chunk_count,
+            chunks_embedded=embedding_result.new_chunks_indexed,
         )
         document_store.update_status(
             document_id,
@@ -171,6 +198,7 @@ async def run_ingestion(
             chunk_count=chunk_count,
             parser_version=parser_version,
             ade_credits_used=credits_used,
+            embedding_model=embedding_result.embedding_model,
         )
         log.info(
             "Ingestion completed",
@@ -178,9 +206,9 @@ async def run_ingestion(
             chunk_count=chunk_count,
             credits_used=credits_used,
             parser_version=parser_version,
+            embedding_model=embedding_result.embedding_model,
         )
 
-        # ── Day 3 hook: embedding_service.index_chunks(document_id) ───────────
 
     except Exception as exc:
         # ── Error path: mark both job and document as failed ──────────────────

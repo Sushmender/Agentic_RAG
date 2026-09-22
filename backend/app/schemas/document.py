@@ -47,6 +47,7 @@ class DocumentMetadata(BaseModel):
     parser_version: Optional[str] = Field(default=None, description="ADE parser version used")
     chunk_count: int = Field(default=0, description="Number of chunks after ADE processing")
     ade_credits_used: float = Field(default=0.0, description="ADE credits consumed for this document")
+    embedding_model: Optional[str] = Field(default=None, description="Embedding model used to index chunks (set after Day 3 indexing)")
     error_message: Optional[str] = Field(default=None, description="Error detail if status=failed")
 
 

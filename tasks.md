@@ -144,14 +144,14 @@
 ## Day 3 — Multimodal Embeddings + ChromaDB Indexing
 
 ### Backend
-- [ ] Implement `backend/app/providers/openrouter_embedding.py` — real OpenRouter embedding client:
+- [x] Implement `backend/app/providers/openrouter_embedding.py` — real OpenRouter embedding client:
   - Model: `nvidia/llama-nemotron-embed-vl-1b-v2`
   - Support **passage mode** (for indexing chunks)
   - Support **query mode** (for embedding user queries)
   - Batch requests: configurable `EMBEDDING_BATCH_SIZE` (default 16)
   - Retry on HTTP 429/5xx with exponential backoff
   - Track: model name, token count, calculated cost, latency
-- [ ] Implement full `backend/app/db/chromadb_client.py`:
+- [x] Implement full `backend/app/db/chromadb_client.py`:
   - Persistent client at `data/chroma_db/`
   - Collection: `ade_documents`
   - Schema: `document_id`, `chunk_id`, `chunk_type`, `page`, `bbox_x0`, `bbox_y0`, `bbox_x1`, `bbox_y1` in metadata
@@ -160,27 +160,27 @@
   - `get_chunk(chunk_id)` — fetch single chunk by ID
   - `delete_document(document_id)` — remove all chunks for a document
   - `get_collection_stats()` — count, document breakdown
-- [ ] Create `backend/app/services/embedding_service.py`:
+- [x] Create `backend/app/services/embedding_service.py`:
   - Load chunks from `data/ade_outputs/{document_id}/chunks.json`
   - Check ChromaDB for existing chunk IDs → skip already-indexed
   - Batch remaining chunks → call OpenRouter embeddings
   - Upsert into ChromaDB with metadata
   - Log: new chunks indexed, skipped, total, embedding cost
-- [ ] Wire embedding service into ingestion pipeline (called after chunking)
-- [ ] Implement `GET /documents/{document_id}/chunks/{chunk_id}` — return chunk metadata from ChromaDB
-- [ ] Create `backend/tests/test_embedding.py` — test batch embedding, ChromaDB upsert, idempotency
+- [x] Wire embedding service into ingestion pipeline (called after chunking)
+- [x] Implement `GET /documents/{document_id}/chunks/{chunk_id}` — return chunk metadata from ChromaDB
+- [x] Create `backend/tests/test_embedding.py` — test batch embedding, ChromaDB upsert, idempotency
 
 ### Frontend
-- [ ] Update document detail view to show: total chunks in ChromaDB, embedding model used
-- [ ] Add ChromaDB collection stats to a simple admin/debug panel (optional)
+- [x] Update document detail view to show: total chunks in ChromaDB, embedding model used
+- [x] Add ChromaDB collection stats to a simple admin/debug panel (optional)
 
 ### Verification
-- [ ] Upload PDF → chunks embedded → ChromaDB `ade_documents` count matches chunk count
-- [ ] Re-run ingestion → NO new embeddings generated (idempotency: log shows "0 new chunks")
-- [ ] `GET /documents/{document_id}/chunks/{chunk_id}` returns correct chunk with bbox/page
-- [ ] Embedding batch size respected (no single API call > `EMBEDDING_BATCH_SIZE` chunks)
-- [ ] Embedding cost logged in structured output
-- [ ] `pytest backend/tests/test_embedding.py` passes
+- [x] Upload PDF → chunks embedded → ChromaDB `ade_documents` count matches chunk count
+- [x] Re-run ingestion → NO new embeddings generated (idempotency: log shows "0 new chunks")
+- [x] `GET /documents/{document_id}/chunks/{chunk_id}` returns correct chunk with bbox/page
+- [x] Embedding batch size respected (no single API call > `EMBEDDING_BATCH_SIZE` chunks)
+- [x] Embedding cost logged in structured output
+- [x] `pytest backend/tests/test_embedding.py` passes
 
 ---
 

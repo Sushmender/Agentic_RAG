@@ -134,6 +134,14 @@ function DocumentCard({ doc, onQuery }) {
                       </span>
                     </div>
                   )}
+                  {doc.embedding_model && (
+                    <div className="details-item">
+                      <span className="details-label">Embedding Model</span>
+                      <span className="details-value details-value--code">
+                        🧠 {doc.embedding_model.replace(':free', '')}
+                      </span>
+                    </div>
+                  )}
                   <div className="details-item">
                     <span className="details-label">Document ID</span>
                     <span className="details-value details-value--mono details-value--truncate">

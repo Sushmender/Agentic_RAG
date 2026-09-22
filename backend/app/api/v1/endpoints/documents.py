@@ -21,7 +21,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
+from app.db.chromadb_client import get_chunk_by_id
 from app.db.in_memory_store import document_store, job_store
+from app.schemas.chunk import ChunkResponse
 from app.schemas.document import (
     DocumentMetadata,
     DocumentStatus,
@@ -238,12 +240,49 @@ async def get_document(
 
 @router.get(
     "/{document_id}/chunks/{chunk_id}",
+    response_model=ChunkResponse,
     summary="Get a specific chunk from a processed document",
+    description=(
+        "Fetch a single chunk's metadata and text from ChromaDB. "
+        "Returns 404 if the chunk does not exist or does not belong to the specified document."
+    ),
 )
 async def get_chunk(
     document_id: str,
     chunk_id: str,
     user_id: str = Depends(get_current_user_id),
-) -> dict:
-    """Full implementation: Day 3 (ChromaDB chunk fetch)."""
-    raise NotImplementedError("GET /documents/{document_id}/chunks/{chunk_id} — implemented Day 3")
+) -> ChunkResponse:
+    """Full ChromaDB implementation — Day 3."""
+    # Verify the parent document exists and belongs to this user
+    doc = document_store.get(document_id, user_id=user_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    # Fetch chunk from ChromaDB
+    chunk_data = get_chunk_by_id(chunk_id)
+    if chunk_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chunk '{chunk_id}' not found in ChromaDB.",
+        )
+
+    # Security check: ensure chunk belongs to the requested document
+    if chunk_data.get("document_id") != document_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chunk '{chunk_id}' does not belong to document '{document_id}'.",
+        )
+
+    return ChunkResponse(
+        chunk_id=chunk_data["chunk_id"],
+        document_id=chunk_data["document_id"],
+        chunk_type=chunk_data["chunk_type"],
+        text=chunk_data["text"],
+        page=chunk_data["page"],
+        bbox=chunk_data["bbox"],
+        source=chunk_data["source"],
+        parser_version=chunk_data["parser_version"],
+    )
