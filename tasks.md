@@ -187,39 +187,39 @@
 ## Day 4 — Query Router + Text/Multimodal/Hybrid Retrieval
 
 ### Backend
-- [ ] Create `backend/app/services/query_router.py` — rule-based router:
+- [x] Create `backend/app/services/query_router.py` — rule-based router:
   - Define multimodal trigger keywords: `table`, `chart`, `figure`, `image`, `graph`, `plot`, `diagram`, `visual`, `picture`, `scan`, `handwritten`, `layout`, `column`, `row`
   - **Text route**: no multimodal keywords, no visual question markers
   - **Multimodal route**: query contains multimodal trigger keywords
   - **Hybrid route**: query asks about both text content and visual elements
   - Return `RouteType` enum: `text | multimodal | hybrid`
   - NO large LLM call for routing — deterministic keyword/heuristic only
-- [ ] Create `backend/app/services/retrieval_service.py`:
+- [x] Create `backend/app/services/retrieval_service.py`:
   - `retrieve_text(query_embedding, document_ids, top_n)` → ChromaDB query, filter `chunk_type=text`, return Top-N
   - `retrieve_multimodal(query_embedding, document_ids, top_n)` → ChromaDB query, all chunk types, return Top-N
   - `retrieve_hybrid(query_embedding, document_ids, top_n)` → merge text + multimodal candidate sets, deduplicate by `chunk_id`, return Top-N
   - Each result includes: `chunk_id`, `document_id`, `chunk_type`, `page`, `bbox`, `text`, `similarity_score`
   - Support optional `document_ids` filter (query specific documents)
   - Default `top_n=20` — enough for reranker to work effectively
-- [ ] Embed user query using OpenRouter (query mode)
-- [ ] Wire router + retrieval into `POST /query` stub (returns candidate list, not yet reranked)
-- [ ] Create `backend/tests/test_retrieval.py` — test each route type, filter behavior, Top-N count
+- [x] Embed user query using OpenRouter (query mode)
+- [x] Wire router + retrieval into `POST /query` stub (returns candidate list, not yet reranked)
+- [x] Create `backend/tests/test_retrieval.py` — test each route type, filter behavior, Top-N count
 
 ### Frontend
-- [ ] Implement query form in `QueryPage.jsx`:
+- [x] Implement query form in `QueryPage.jsx`:
   - Text input for question
   - Optional: document selector (filter by document_id)
   - Submit button
-- [ ] Display raw retrieval results (pre-reranking) as a debug option (hidden behind toggle)
-- [ ] Show detected route type (text/multimodal/hybrid) as a tag
+- [x] Display raw retrieval results (pre-reranking) as a debug option (hidden behind toggle)
+- [x] Show detected route type (text/multimodal/hybrid) as a tag
 
 ### Verification
-- [ ] Query "What is the revenue?" → route=text, returns text chunks
-- [ ] Query "Show me the revenue table" → route=multimodal, returns table/figure chunks
-- [ ] Query "Describe the chart and its text caption" → route=hybrid, returns mixed chunks
-- [ ] `top_n=20` candidate chunks returned for all route types
-- [ ] Results include `chunk_type`, `page`, `bbox`, `similarity_score`
-- [ ] `pytest backend/tests/test_retrieval.py` passes
+- [x] Query "What is the revenue?" → route=text, returns text chunks
+- [x] Query "Show me the revenue table" → route=multimodal, returns table/figure chunks
+- [x] Query "Describe the chart and its text caption" → route=hybrid, returns mixed chunks
+- [x] `top_n=20` candidate chunks returned for all route types
+- [x] Results include `chunk_type`, `page`, `bbox`, `similarity_score`
+- [x] `pytest backend/tests/test_retrieval.py` passes
 
 ---
 
