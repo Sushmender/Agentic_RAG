@@ -75,13 +75,18 @@ class QueryRequest(BaseModel):
         le=20,
         description="Override default rerank_top_k for this query"
     )
+    llm_provider: Optional[str] = Field(
+        default="groq",
+        description="Preferred LLM provider: 'groq' (Qwen 3.8 27B) or 'openrouter' (Nemotron 120B)"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "What was the total revenue in Q3?",
                 "document_ids": ["abc123"],
-                "top_k": 5
+                "top_k": 5,
+                "llm_provider": "groq"
             }
         }
 

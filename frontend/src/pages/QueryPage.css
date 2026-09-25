@@ -150,6 +150,55 @@
   flex-wrap: wrap;
 }
 
+/* ── Provider selector ──────────────────────────────────────────────────── */
+.provider-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.provider-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+}
+
+.provider-dropdown {
+  padding: 0.55rem 0.85rem;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.84rem;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(255,255,255,0.4)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2.2rem;
+  min-width: 200px;
+}
+
+.provider-dropdown:hover {
+  border-color: rgba(99, 102, 241, 0.45);
+  background-color: rgba(99, 102, 241, 0.08);
+}
+
+.provider-dropdown:focus {
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.provider-dropdown option {
+  background: #1a1a2e;
+  color: #f1f5f9;
+}
+
 /* ── Submit button ──────────────────────────────────────────────────────── */
 .query-btn {
   display: inline-flex;
@@ -198,6 +247,7 @@
 
 .debug-toggle-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+
   color: #fff;
 }
 
@@ -265,6 +315,46 @@
 .result-count {
   font-size: 0.8rem;
   color: rgba(255, 255, 255, 0.38);
+}
+
+/* ── Model badge ────────────────────────────────────────────────────────── */
+.model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 20px;
+  font-size: 0.78rem;
+  color: #6ee7b7;
+  animation: popIn 0.25s ease;
+}
+
+.model-badge strong {
+  font-weight: 700;
+  color: #a7f3d0;
+}
+
+.model-badge-model {
+  color: rgba(167, 243, 208, 0.6);
+  font-family: 'Courier New', monospace;
+  font-size: 0.72rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-badge-tokens {
+  color: rgba(167, 243, 208, 0.5);
+  font-size: 0.72rem;
+}
+
+.model-badge-cost {
+  color: #fbbf24;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 /* ── Answer box ─────────────────────────────────────────────────────────── */
@@ -362,6 +452,15 @@
   font-weight: 700;
   color: rgba(255, 255, 255, 0.3);
   min-width: 1.5rem;
+}
+
+.source-filename {
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.5);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-type-badge {
@@ -627,4 +726,80 @@
   .source-card-header { flex-wrap: wrap; row-gap: 0.4rem; }
   .source-score { margin-left: 0; }
   .debug-table { font-size: 0.72rem; }
+}
+
+/* ── Citations & Badges ─────────────────────────────────────────────────── */
+.citation-badge {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  margin: 0 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #a5b4fc;
+  background-color: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  vertical-align: super;
+}
+
+.citation-badge:hover {
+  background-color: rgba(99, 102, 241, 0.3);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.highlight-pulse {
+  animation: cardPulse 1.5s ease-out;
+}
+
+@keyframes cardPulse {
+  0% {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0);
+  }
+  30% {
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.6);
+    border-color: rgba(99, 102, 241, 0.8);
+  }
+  100% {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0);
+  }
+}
+
+/* ── Markdown & Table Rendering ─────────────────────────────────────────── */
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  text-align: left;
+}
+
+.markdown-body th {
+  background-color: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+.markdown-body tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
 }

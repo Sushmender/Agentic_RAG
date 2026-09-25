@@ -226,51 +226,51 @@
 ## Day 5 — Reranking + Context Assembly + LLM Generation
 
 ### Backend
-- [ ] Implement `backend/app/providers/openrouter_reranker.py`:
+- [x] Implement `backend/app/providers/openrouter_reranker.py`:
   - Model: `nvidia/llama-nemotron-rerank-vl-1b-v2`
   - Input: query + list of candidate chunks (Top-N from retrieval)
   - Output: reranked list with relevance scores
   - Never rerank full collection — only retrieved Top-N candidates
   - Retry on failure; track latency and usage
-- [ ] Create `backend/app/services/context_assembly.py`:
+- [x] Create `backend/app/services/context_assembly.py`:
   - Select Top-K (default 5) from reranked candidates
   - Deduplicate exact/near-duplicate chunks (same `chunk_id`)
   - Preserve provenance: `document_id`, `chunk_id`, `page`, `bbox`, `chunk_type`
   - Enforce LLM context window: truncate if total tokens exceed `MAX_CONTEXT_TOKENS`
   - Flag visual chunks (`chunk_type != text`) for special handling in LLM prompt
-- [ ] Implement `backend/app/providers/groq.py`:
+- [x] Implement `backend/app/providers/groq.py`:
   - Real Groq API client for Qwen 27B
   - Async HTTP call with `httpx`
   - Retry on failure; track latency, input/output tokens, cost
-- [ ] Implement `backend/app/providers/openrouter_llm.py`:
+- [x] Implement `backend/app/providers/openrouter_llm.py`:
   - Real OpenRouter client for `nvidia/nemotron-3-super-120b-a12b:free`
   - Same interface as Groq provider
-- [ ] Create `backend/app/services/llm_service.py`:
+- [x] Create `backend/app/services/llm_service.py`:
   - Build grounded prompt: "Answer using ONLY the provided evidence. Cite sources."
   - Try Groq (Qwen 27B) first
   - On Groq failure/timeout → auto-fallback to OpenRouter (Nemotron 120B)
   - Log which provider was used, why fallback triggered
   - Return structured `{ answer, sources, model_used, provider_used }`
-- [ ] Complete `POST /query` endpoint — full pipeline:
+- [x] Complete `POST /query` endpoint — full pipeline:
   - Route → Embed query → Retrieve Top-N → Rerank → Assemble context → Generate → Return grounded response
   - Support `llm_provider` selection from `QueryRequest` (default Groq, fallback OpenRouter if requested)
   - Response: `{ answer, sources: [{ document_id, chunk_id, page, bbox, chunk_type }], latency_ms, model_used }`
-- [ ] Create `backend/tests/test_query_pipeline.py` — integration test for full pipeline
+- [x] Create `backend/tests/test_query_pipeline.py` — integration test for full pipeline
 
 ### Frontend
-- [ ] Display final answer in styled answer box
-- [ ] Display source cards below answer: document name, page number, chunk type badge
-- [ ] Show `bbox` as text coordinates (visual highlight reserved for Day 8)
-- [ ] Show model used (Groq/Qwen or OpenRouter/Nemotron) and latency
-- [ ] Add dropdown in `QueryPage.jsx` to allow user to select between Qwen 32B (Groq) and Nemotron 120B (OpenRouter)
+- [x] Display final answer in styled answer box
+- [x] Display source cards below answer: document name, page number, chunk type badge
+- [x] Show `bbox` as text coordinates (visual highlight reserved for Day 8)
+- [x] Show model used (Groq/Qwen or OpenRouter/Nemotron) and latency
+- [x] Add dropdown in `QueryPage.jsx` to allow user to select between Qwen 32B (Groq) and Nemotron 120B (OpenRouter)
 
 ### Verification
-- [ ] `POST /query` returns `{ answer, sources }` with correct schema
-- [ ] Sources contain `document_id`, `chunk_id`, `page`, `bbox`, `chunk_type`
-- [ ] Fallback triggers when Groq key invalid → response still returns from OpenRouter
-- [ ] Answer references document evidence (not hallucinated)
-- [ ] Reranker called with Top-N (≤20) candidates, returns Top-K (≤5)
-- [ ] `pytest backend/tests/test_query_pipeline.py` passes
+- [x] `POST /query` returns `{ answer, sources }` with correct schema
+- [x] Sources contain `document_id`, `chunk_id`, `page`, `bbox`, `chunk_type`
+- [x] Fallback triggers when Groq key invalid → response still returns from OpenRouter
+- [x] Answer references document evidence (not hallucinated)
+- [x] Reranker called with Top-N (≤20) candidates, returns Top-K (≤5)
+- [x] `pytest backend/tests/test_query_pipeline.py` passes
 
 ---
 

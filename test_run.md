@@ -1,7 +1,7 @@
-# Test Run Guide — Multimodal RAG Platform (Days 0–4)
+# Test Run Guide — Multimodal RAG Platform (Days 0–5)
 
-> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · **Day 4 Query Router + Retrieval**  
-> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed)
+> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · **Day 5 Reranking + Context Assembly + LLM Generation**  
+> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B)
 
 ---
 
@@ -16,16 +16,21 @@
 | Redis | Local or Upstash (TLS `rediss://` URL) |
 | `OPENROUTER_API_KEY` | Required from Day 3 onwards |
 | `LANDINGAI_API_KEY` | Required from Day 2 onwards |
-| `GROQ_API_KEY` | Required from Day 5 onwards |
+| `GROQ_API_KEY` | Required from Day 5 onwards ✅ |
 
 **Verify `backend/.env` has all required keys:**
 ```env
 OPENROUTER_API_KEY=sk-or-v1-...
 LANDINGAI_API_KEY=...
-GROQ_API_KEY=...
+GROQ_API_KEY=gsk_...
 REDIS_URL=rediss://default:...
 EMBEDDING_MODEL=nvidia/llama-nemotron-embed-vl-1b-v2:free
+RERANKER_MODEL=nvidia/llama-nemotron-rerank-vl-1b-v2:free
+FALLBACK_LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+PRIMARY_LLM_MODEL=qwen/qwen3.8-27b
 EMBEDDING_BATCH_SIZE=16
+RERANK_TOP_K=5
+MAX_CONTEXT_TOKENS=8000
 ADE_MODEL=dpt-2-latest
 ```
 
@@ -713,6 +718,398 @@ INFO  Retrieval complete  strategy=hybrid  results_count=20  text_raw=20  visual
 
 ---
 
+## Day 5 — Reranking + Context Assembly + LLM Generation
+
+> [!IMPORTANT]
+> **What Day 5 added:** The complete answer pipeline is now live. `POST /query` goes all the way:
+> **Route → Embed → Retrieve (Top-20) → Rerank (Top-5) → Assemble grounded context → Generate answer**
+>
+> - **Reranker:** `nvidia/llama-nemotron-rerank-vl-1b-v2:free` via OpenRouter — scores 20 candidates, returns Top-5
+> - **Primary LLM:** `qwen/qwen3.8-27b` via Groq — fast inference, grounded prompt
+> - **Fallback LLM:** `nvidia/nemotron-3-super-120b-a12b:free` via OpenRouter — activated automatically if Groq fails
+> - **Reranker failure:** logs the error, skips reranking, LLM still generates an answer from raw retrieval order
+> - **Frontend:** Provider selector dropdown (Groq / Nemotron), model badge with tokens + cost
+
+---
+
+### How the Day 5 Pipeline Works
+
+```
+User query: "What is the total revenue?"
+       ↓
+ [Route] → text
+       ↓
+ [Embed query] → [0.08, -0.41, ...]  (NVIDIA Nemotron, query mode)
+       ↓
+ [Retrieve Top-20] → 20 candidates from ChromaDB by cosine similarity
+       ↓
+ [Rerank Top-5] → nvidia/llama-nemotron-rerank-vl-1b-v2:free
+                  Input: query + 20 candidate texts
+                  Output: 5 chunks sorted by relevance_score desc
+       ↓
+ [Assemble context] → Token-budget check (len//4 estimate)
+                      Build grounded prompt:
+                      [Source 1 — page 3, type: text]  <chunk text>
+                      [Source 2 — page 1, type: table] <chunk text>
+                      ...
+                      QUESTION: What is the total revenue?
+                      ANSWER:
+       ↓
+ [Generate] → Try Groq (qwen/qwen3.8-27b)
+              On any failure → OpenRouter (nemotron-3-super-120b-a12b:free)
+       ↓
+ QueryResponse: { answer, sources[5], model_used, provider_used, latency, token_usage, cost_usd }
+```
+
+---
+
+### 5.1 Automated Tests
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+
+# Day 5 tests only (21 tests, ~8s, all mocked)
+.venv\Scripts\python.exe -m pytest tests/test_query_pipeline.py -v
+
+# Full suite Days 0–5 (84 pass, 1 pre-existing ADE fixture error)
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Expected Day 5 test output:**
+```
+tests/test_query_pipeline.py::TestFullPipeline::test_query_returns_200_with_answer          PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_response_schema_complete               PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_latency_fields_all_present             PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_sources_have_correct_schema            PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_token_usage_populated                  PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_route_type_in_response                 PASSED
+tests/test_query_pipeline.py::TestFullPipeline::test_cache_hit_false_on_fresh_query         PASSED
+tests/test_query_pipeline.py::TestProviderSelection::test_groq_provider_used_by_default     PASSED
+tests/test_query_pipeline.py::TestProviderSelection::test_openrouter_provider_selected      PASSED
+tests/test_query_pipeline.py::TestProviderSelection::test_openrouter_model_name_in_response PASSED
+tests/test_query_pipeline.py::TestRerankerFailure::test_reranker_failure_does_not_break_pipeline PASSED
+tests/test_query_pipeline.py::TestRerankerFailure::test_reranker_failure_answer_still_grounded   PASSED
+tests/test_query_pipeline.py::TestRerankerFailure::test_reranker_failure_still_returns_sources   PASSED
+tests/test_query_pipeline.py::TestGroqFallback::test_groq_failure_triggers_openrouter_fallback   PASSED
+tests/test_query_pipeline.py::TestGroqFallback::test_groq_timeout_falls_back_to_openrouter       PASSED
+tests/test_query_pipeline.py::TestGroqFallback::test_groq_http_error_falls_back_to_openrouter    PASSED
+tests/test_query_pipeline.py::TestEmptyRetrieval::test_empty_retrieval_returns_200               PASSED
+tests/test_query_pipeline.py::TestEmptyRetrieval::test_empty_retrieval_informative_message       PASSED
+tests/test_query_pipeline.py::TestRerankerTopK::test_reranker_called_with_candidates_and_returns_correct_sources PASSED
+tests/test_query_pipeline.py::TestInputValidation::test_empty_query_rejected                     PASSED
+tests/test_query_pipeline.py::TestInputValidation::test_missing_auth_rejected                    PASSED
+
+21 passed in ~8s
+```
+
+**Overall after Day 5:** `84 passed, 1 error` (the 1 error is `test_ade.py::test_parse_sample` — a pre-existing fixture issue unrelated to Day 5, present since Day 2).
+
+### 5.2 Ask a Question — Full Answer (Frontend)
+
+1. Make sure a document is uploaded and `completed`
+2. Navigate to **💬 Ask a Question**
+3. Select a model from the dropdown:
+   - **⚡ Groq — Qwen 3.8 27B** (default, faster)
+   - **🔮 OpenRouter — Nemotron 120B** (larger, free tier)
+4. Type your question and click **🔍 Ask Question**
+
+**Expected results panel (Day 5 — real answer):**
+
+```
+📝 Text  ⚡ Groq  qwen/qwen3.8-27b  560 tokens  $0.0003   ⏱ 2850 ms   5 sources
+┌─────────────────────────────────────────────────────────────────────┐
+│ Total revenue in Q3 was $4.2 billion, representing a 12% increase  │
+│ year-over-year. [Source 1] The breakdown by segment shows...       │
+│ [Source 2]                                                          │
+└─────────────────────────────────────────────────────────────────────┘
+📎 Sources  grounded citations — sorted by relevance
+  #1  📁 report.pdf  📄 Text   Page 3   94.5%  ▼
+  #2  📁 report.pdf  📊 Table  Page 5   89.1%  ▼
+  ...
+```
+
+**Answer box:** Now shows the real LLM answer (no placeholder badge).
+
+**Model badge (green pill):**
+```
+⚡ Groq  qwen/qwen3.8-27b  560 tokens  $0.0003
+```
+
+**Source card (expanded):**
+```
+"Q3 net revenue reached $4.2 billion, representing..."
+
+Chunk ID   abc12345678...
+Doc ID     sha256abc12...
+BBox       [0.14, 0.07, 0.85, 0.11]
+```
+
+**Note:** Filename now appears in source card headers (📁 report.pdf).
+
+### 5.3 Switch Provider to Nemotron 120B
+
+1. In the query form, open the **🤖 Model** dropdown
+2. Select **🔮 OpenRouter — Nemotron 120B**
+3. Ask the same question
+
+**Expected:**
+- Model badge shows: `🔮 OpenRouter  nvidia/nemotron-3-super-120b-a12b:free`
+- `cost_usd` shows `$0.0000` (free tier)
+- Answer may be slightly different phrasing — same grounded content
+
+### 5.4 Debug Panel — Full Pipeline Latency
+
+After receiving a result, click **🔓 Show debug**.
+
+**Expected debug panel (Day 5 — all stages filled):**
+```
+🔬 Pipeline Debug
+Embed: 1198 ms  |  Retrieve: 44 ms  |  Rerank: 380 ms  |  LLM: 1228 ms  |  Route: text
+
+Input tokens: 512   Output tokens: 48   Total tokens: 560
+```
+
+> [!NOTE]
+> In Day 4, `Rerank` and `LLM` were `0 ms`. Now all four stages show real timings.
+
+### 5.5 API Test via Swagger (`POST /query`) — Day 5
+
+Go to **http://localhost:8000/docs** → Authorize with JWT.
+
+**Request with provider selection:**
+```json
+{
+  "query": "What is the total revenue?",
+  "llm_provider": "groq"
+}
+```
+
+**Request forcing OpenRouter:**
+```json
+{
+  "query": "Show me the revenue table",
+  "llm_provider": "openrouter"
+}
+```
+
+**Expected 200 response (Day 5):**
+```json
+{
+  "answer": "Total revenue in Q3 was $4.2 billion based on the provided evidence. [Source 1] The sales breakdown shows... [Source 2]",
+  "sources": [
+    {
+      "document_id": "abc123...",
+      "chunk_id": "sha256...",
+      "page": 2,
+      "bbox": [0.14, 0.07, 0.85, 0.11],
+      "chunk_type": "text",
+      "text_preview": "Q3 net revenue reached $4.2 billion...",
+      "relevance_score": 0.945,
+      "filename": "budget_report.pdf"
+    }
+  ],
+  "route_type": "text",
+  "cache_hit": false,
+  "model_used": "qwen/qwen3.8-27b",
+  "provider_used": "groq",
+  "latency": {
+    "total_ms": 2850.2,
+    "cache_check_ms": 0.0,
+    "query_embed_ms": 1198.4,
+    "retrieval_ms": 44.2,
+    "reranking_ms": 380.1,
+    "llm_ms": 1227.5
+  },
+  "token_usage": {
+    "input_tokens": 512,
+    "output_tokens": 48,
+    "total_tokens": 560
+  },
+  "cost_usd": 0.0003
+}
+```
+
+**Key differences from Day 4:**
+
+| Field | Day 4 | Day 5 |
+|---|---|---|
+| `answer` | Placeholder text | Real grounded LLM answer with `[Source N]` citations |
+| `model_used` | `""` (empty) | `"qwen/qwen3.8-27b"` |
+| `provider_used` | `""` (empty) | `"groq"` |
+| `latency.reranking_ms` | `0.0` | `~380 ms` |
+| `latency.llm_ms` | `0.0` | `~1200 ms` |
+| `token_usage` | `{}` (empty) | `{ input_tokens, output_tokens, total_tokens }` |
+| `cost_usd` | `0.0` | `~0.0003` |
+| `sources[*].filename` | `""` (empty) | `"budget_report.pdf"` |
+| `sources` count | Up to 20 (raw retrieval) | Up to 5 (post-rerank) |
+
+### 5.6 PowerShell Verification Commands
+
+```powershell
+# Get token
+$loginResult = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/auth/login" `
+  -Method POST -ContentType "application/x-www-form-urlencoded" `
+  -Body "username=yourusername&password=yourpassword"
+$token = $loginResult.access_token
+
+# Full pipeline — Groq primary
+$result = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query" `
+  -Method POST `
+  -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+  -Body '{"query": "What is the total revenue?", "llm_provider": "groq"}'
+
+# Inspect the answer
+$result.answer
+
+# Inspect provider + model
+$result | Select-Object provider_used, model_used, cost_usd
+
+# Inspect full latency breakdown
+$result.latency
+
+# Inspect token usage
+$result.token_usage
+
+# Count sources (should be ≤ 5 after reranking)
+$result.sources.Count
+
+# Check first source filename is populated
+$result.sources[0].filename
+
+# Force OpenRouter Nemotron 120B
+$result2 = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query" `
+  -Method POST `
+  -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+  -Body '{"query": "What is the total revenue?", "llm_provider": "openrouter"}'
+$result2 | Select-Object provider_used, model_used, cost_usd
+```
+
+**Expected outputs:**
+```
+# $result.answer
+"Total revenue in Q3 was $4.2 billion based on the evidence. [Source 1]..."
+
+# provider + model
+provider_used  model_used           cost_usd
+-------------- -------------------- --------
+groq           qwen/qwen3.8-27b     0.0003
+
+# latency
+total_ms       : 2850.2
+cache_check_ms : 0.0
+query_embed_ms : 1198.4
+retrieval_ms   : 44.2
+reranking_ms   : 380.1
+llm_ms         : 1227.5
+
+# token_usage
+input_tokens  : 512
+output_tokens : 48
+total_tokens  : 560
+
+# source count
+5
+
+# filename
+budget_report.pdf
+
+# OpenRouter result
+provider_used       model_used                              cost_usd
+-----------         ---------------------------------------  --------
+openrouter          nvidia/nemotron-3-super-120b-a12b:free  0.0
+```
+
+### 5.7 Log Reading Guide — Day 5 Full Pipeline
+
+Full structured log for one complete query (all stages):
+
+```
+INFO  Query pipeline started
+      user_id=u123  query_preview="What is the total revenue?"
+      preferred_provider=groq  top_n=20  top_k=5
+
+# Step 1: Route (< 1 ms)
+INFO  Query routed           route=text
+
+# Step 2: Embed query (~1–2 sec)
+DEBUG Calling OpenRouter embeddings API  input_type=query
+INFO  Embedding batch complete           latency_ms=1198.4  total_tokens=8
+INFO  Query embedded                     embed_ms=1198.4
+
+# Step 3: Retrieve Top-20 (~40–80 ms)
+INFO  Retrieval complete     strategy=text  results_count=20  latency_ms=44.2
+
+# Step 4: Rerank Top-5 (~300–600 ms)
+INFO  Calling OpenRouter reranker   model=nvidia/llama-nemotron-rerank-vl-1b-v2:free
+                                    candidates_count=20  top_k=5
+INFO  Reranking complete            latency_ms=380.1  returned=5
+
+# Step 5: Context assembly
+INFO  Context assembled       chunks_selected=5  tokens_est=1240  truncated=False
+
+# Step 6: Generate (Groq, ~800–2000 ms)
+INFO  Calling primary LLM (Groq)   model=qwen/qwen3.8-27b
+INFO  Groq generation complete     input_tokens=512  output_tokens=48  latency_ms=1227.5  cost_usd=0.0003
+
+# Pipeline complete
+INFO  Query pipeline complete
+      route=text  provider=groq  model=qwen/qwen3.8-27b
+      fallback=False  rerank_skipped=False
+      total_ms=2850.2  llm_ms=1227.5  total_tokens=560  cost_usd=0.0003
+```
+
+### 5.8 Reranker Failure — Log Observation
+
+If the OpenRouter reranker is unavailable (e.g. API key quota exceeded):
+
+```
+INFO  Calling OpenRouter reranker   candidates_count=20  top_k=5
+ERROR Reranker failed — skipping reranking, using raw retrieval order
+      error=HTTPStatusError  error_type=httpx.HTTPStatusError
+
+# Pipeline continues — LLM still generates answer from raw Top-5
+INFO  Context assembled       chunks_selected=5  tokens_est=1100  truncated=False
+INFO  Calling primary LLM (Groq)
+INFO  Query pipeline complete  rerank_skipped=True
+```
+
+> [!NOTE]
+> `rerank_skipped=True` in the log tells you reranking was bypassed.
+> The answer is still generated — just from retrieval order, not reranked order.
+
+### 5.9 Groq Fallback — Log Observation
+
+If Groq fails (rate limit, bad API key, timeout):
+
+```
+INFO  Calling primary LLM (Groq)
+WARNING  Groq failed — triggering OpenRouter fallback
+         fallback_reason=HTTPStatusError: 429 Too Many Requests
+
+INFO  Calling OpenRouter fallback LLM (Nemotron 120B)
+INFO  OpenRouter LLM succeeded   provider=openrouter  fallback=True
+INFO  Query pipeline complete    provider=openrouter  model=nvidia/nemotron-3-super-120b-a12b:free
+                                  fallback_triggered=True
+```
+
+> [!NOTE]
+> The response still returns `200 OK` with a real answer — just from OpenRouter instead of Groq.
+> `provider_used` in the response will be `"openrouter"` instead of `"groq"`.
+
+### 5.10 Error Cases
+
+| Test | Expected |
+|------|----------|
+| No `Authorization` header | `401 Unauthorized` |
+| Empty `query` string | `422 Unprocessable Entity` |
+| Both Groq AND OpenRouter fail | `502 Bad Gateway` with `LLM generation failed` detail |
+| Valid query, empty ChromaDB | `200` with informative `answer`, `sources: []` |
+| `llm_provider` = `"groq"` (default) | `provider_used: "groq"` in response |
+| `llm_provider` = `"openrouter"` | `provider_used: "openrouter"`, Groq skipped entirely |
+| Reranker fails mid-pipeline | `200` with answer from raw retrieval order |
+
+---
+
 ## Pipeline Status — What Is Built vs What Remains
 
 | Day | Feature | Status |
@@ -722,14 +1119,10 @@ INFO  Retrieval complete  strategy=hybrid  results_count=20  text_raw=20  visual
 | 2 | ADE + Chunking: real ADE integration, multimodal chunks with bbox/page/type preserved | ✅ Built |
 | 3 | Embeddings + Index: OpenRouter NVIDIA embeddings, ChromaDB indexing, idempotency | ✅ Built |
 | 4 | Router + Retrieval: query router (text/multimodal/hybrid), Top-N candidates via ChromaDB | ✅ Built |
-| 5 | Rerank + LLM: OpenRouter reranker, context assembly, Qwen 27B + Nemotron fallback, grounded answer | Not built |
+| 5 | Rerank + LLM: OpenRouter reranker, context assembly, Qwen 3.8 27B + Nemotron fallback, grounded answer | ✅ **Built** |
 | 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion | Not built |
 | 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint | Not built |
 | 8 | Evaluation + Hardening: Recall@K / Precision@K, Docker Compose, rate limiting, full polish | Not built |
-
-The `POST /query` endpoint returns a **placeholder answer** (Day 4). Day 5 replaces it with
-a real grounded LLM answer. All source citations, route tags, latency breakdowns, and
-similarity scores are already real as of Day 4.
 
 ---
 
@@ -753,3 +1146,14 @@ similarity scores are already real as of Day 4.
 | `POST /query` | Day 4 | Route → embed (query mode) → retrieve Top-N → return candidates |
 | `QueryPage.jsx` + `QueryPage.css` | Day 4 | Full query UI: doc selector, route tag, source cards, debug toggle |
 | `tests/test_retrieval.py` | Day 4 | 16 mocked tests (8 router + 8 retrieval strategies) |
+| `providers/openrouter_reranker.py` | Day 5 | Real `/rerank` API — NVIDIA reranker via OpenRouter, maps scores by index |
+| `providers/groq.py` | Day 5 | Groq chat completions — Qwen 3.8 27B, token tracking, cost estimate, retry |
+| `providers/openrouter_llm.py` | Day 5 | OpenRouter chat completions — Nemotron 120B fallback, same interface as Groq |
+| `services/context_assembly.py` | Day 5 | Dedup chunks, token-budget enforcement, `[Source N]` grounded prompt builder |
+| `services/llm_service.py` | Day 5 | Groq primary → OpenRouter fallback orchestration with full provenance |
+| `POST /query` (upgraded) | Day 5 | Full pipeline: rerank → assemble context → generate → return grounded answer |
+| `schemas/query.py` (`llm_provider` field) | Day 5 | Optional provider selector in `QueryRequest` |
+| `QueryPage.jsx` (Day 5 updates) | Day 5 | Provider dropdown, `ModelBadge`, filename in source cards, full latency debug |
+| `QueryPage.css` (Day 5 updates) | Day 5 | `.provider-dropdown`, `.model-badge`, `.source-filename` styles |
+| `tests/test_query_pipeline.py` | Day 5 | 21 mocked integration tests — full pipeline, fallback, reranker failure |
+

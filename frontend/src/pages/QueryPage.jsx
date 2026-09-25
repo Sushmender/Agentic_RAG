@@ -1,12 +1,13 @@
 /**
  * frontend/src/pages/QueryPage.jsx
  * Query input and results page.
- * Day 4: Full implementation — route tag, document selector, debug toggle,
- *         retrieval candidate cards.
- * Day 5: Answer box + source citations wired after LLM integration.
+ * Day 5: Full pipeline — real answer, provider selector dropdown,
+ *         model badge, reranker count, latency breakdown, source citations.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { documentsAPI, queryAPI } from '../services/api';
 import './QueryPage.css';
 
@@ -24,17 +25,23 @@ const CHUNK_TYPE_META = {
   figure:  { icon: '🖼️', label: 'Figure',  color: '#f59e0b' },
 };
 
+const PROVIDER_OPTIONS = [
+  { value: 'groq',        label: 'Groq — Qwen 3.8 27B',     icon: '⚡' },
+  { value: 'openrouter',  label: 'OpenRouter — Nemotron 120B', icon: '🔮' },
+];
+
 /* ── Main component ───────────────────────────────────────────────────────── */
 
 export default function QueryPage() {
-  const [query, setQuery]           = useState('');
-  const [documents, setDocuments]   = useState([]);
+  const [query, setQuery]               = useState('');
+  const [documents, setDocuments]       = useState([]);
   const [selectedDocs, setSelectedDocs] = useState([]);
-  const [loading, setLoading]       = useState(false);
-  const [result, setResult]         = useState(null);   // QueryResponse
-  const [error, setError]           = useState(null);
-  const [showDebug, setShowDebug]   = useState(false);
-  const [docsLoading, setDocsLoading] = useState(true);
+  const [provider, setProvider]         = useState('groq');
+  const [loading, setLoading]           = useState(false);
+  const [result, setResult]             = useState(null);   // QueryResponse
+  const [error, setError]               = useState(null);
+  const [showDebug, setShowDebug]       = useState(false);
+  const [docsLoading, setDocsLoading]   = useState(true);
   const textareaRef = useRef(null);
 
   /* Load completed documents for the document selector */
@@ -77,8 +84,9 @@ export default function QueryPage() {
 
     try {
       const payload = {
-        query: query.trim(),
+        query:        query.trim(),
         document_ids: selectedDocs.length > 0 ? selectedDocs : null,
+        llm_provider: provider,
       };
       const res = await queryAPI.query(payload);
       setResult(res.data);
@@ -150,8 +158,26 @@ export default function QueryPage() {
           <span className="query-shortcut-hint">Ctrl+Enter to submit</span>
         </div>
 
-        {/* Submit row */}
+        {/* Submit row: provider dropdown + submit button */}
         <div className="query-form-footer">
+          {/* Provider selector dropdown */}
+          <div className="provider-selector">
+            <label htmlFor="provider-select" className="provider-label">🤖 Model</label>
+            <select
+              id="provider-select"
+              className="provider-dropdown"
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              disabled={loading}
+            >
+              {PROVIDER_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.icon} {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <button
             id="query-submit-btn"
             type="submit"
@@ -170,7 +196,7 @@ export default function QueryPage() {
               className="debug-toggle-btn"
               onClick={() => setShowDebug(v => !v)}
             >
-              {showDebug ? '🔒 Hide' : '🔓 Show'} raw candidates
+              {showDebug ? '🔒 Hide' : '🔓 Show'} debug
             </button>
           )}
         </div>
@@ -191,26 +217,34 @@ export default function QueryPage() {
       {!loading && result && (
         <div className="query-results">
 
-          {/* Route tag + latency */}
+          {/* Meta row: route + latency + reranker count + model badge */}
           <div className="result-meta-row">
             <RouteTag route={result.route_type} />
+            {result.model_used && (
+              <ModelBadge
+                model={result.model_used}
+                provider={result.provider_used}
+                tokens={result.token_usage?.total_tokens}
+                costUsd={result.cost_usd}
+              />
+            )}
             <span className="result-latency">
-              ⏱ {result.latency?.total_ms?.toFixed(0) ?? '—'} ms
+              ⏱ {result.latency?.total_ms?.toFixed(0) ?? '—'} ms total
             </span>
             <span className="result-count">
-              {result.sources.length} candidate{result.sources.length !== 1 ? 's' : ''}
+              {result.sources.length} source{result.sources.length !== 1 ? 's' : ''}
             </span>
           </div>
 
-          {/* Answer box — Day 4 shows placeholder; Day 5 shows real answer */}
-          <AnswerBox answer={result.answer} isPlaceholder={!result.model_used} />
+          {/* Answer box */}
+          <AnswerBox answer={result.answer} hasModel={!!result.model_used} />
 
-          {/* Source cards (always shown) */}
+          {/* Source cards (citations below answer) */}
           {result.sources.length > 0 && (
             <div className="sources-section">
               <h3 className="sources-heading">
-                📎 Retrieved Chunks
-                <span className="sources-subhead">sorted by similarity score</span>
+                📎 Sources
+                <span className="sources-subhead">grounded citations — sorted by relevance</span>
               </h3>
               <div className="source-cards">
                 {result.sources.map((src, idx) => (
@@ -222,7 +256,12 @@ export default function QueryPage() {
 
           {/* Debug panel */}
           {showDebug && (
-            <DebugPanel sources={result.sources} route={result.route_type} latency={result.latency} />
+            <DebugPanel
+              sources={result.sources}
+              route={result.route_type}
+              latency={result.latency}
+              tokenUsage={result.token_usage}
+            />
           )}
 
           {/* Empty candidates */}
@@ -262,15 +301,64 @@ function RouteTag({ route }) {
   );
 }
 
-function AnswerBox({ answer, isPlaceholder }) {
+function ModelBadge({ model, provider, tokens, costUsd }) {
+  const providerLabel = provider === 'groq' ? 'Groq' : 'OpenRouter';
+  const providerIcon  = provider === 'groq' ? '⚡' : '🔮';
   return (
-    <div className={`answer-box ${isPlaceholder ? 'answer-box--placeholder' : ''}`}>
-      {isPlaceholder && (
+    <span className="model-badge">
+      {providerIcon} <strong>{providerLabel}</strong>
+      <span className="model-badge-model">{model}</span>
+      {tokens > 0 && <span className="model-badge-tokens">{tokens.toLocaleString()} tokens</span>}
+      {costUsd > 0 && <span className="model-badge-cost">${costUsd.toFixed(4)}</span>}
+    </span>
+  );
+}
+
+function AnswerBox({ answer, hasModel }) {
+  // Parse [Source X] and turn into clickable badges
+  const renderAnswerWithCitations = (text) => {
+    if (!text) return null;
+    
+    // Split by [Source X] or [Source X, Y]
+    // The backend uses [Source 1], etc.
+    const parts = text.split(/(\[Source \d+\])/g);
+    
+    return parts.map((part, i) => {
+      const match = part.match(/\[Source (\d+)\]/);
+      if (match) {
+        const sourceNum = match[1];
+        return (
+          <a
+            key={i}
+            href={`#source-card-${sourceNum}`}
+            className="citation-badge"
+            title={`Go to Source ${sourceNum}`}
+            onClick={(e) => {
+              e.preventDefault();
+              const el = document.getElementById(`source-card-${sourceNum}`);
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('highlight-pulse');
+                setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
+              }
+            }}
+          >
+            {sourceNum}
+          </a>
+        );
+      }
+      return <span key={i}>{part}</span>;
+    });
+  };
+
+  return (
+    <div className={`answer-box ${!hasModel ? 'answer-box--placeholder' : ''}`}>
+      {!hasModel && (
         <div className="answer-placeholder-badge">
           ⏳ Retrieval only — answer generation coming in next pipeline stage
         </div>
       )}
-      <p className="answer-text">{answer}</p>
+      <p className="answer-text">{renderAnswerWithCitations(answer)}</p>
     </div>
   );
 }
@@ -280,9 +368,14 @@ function SourceCard({ source, rank }) {
   const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
 
   return (
-    <div className="source-card" id={`source-card-${source.chunk_id}`}>
+    <div className="source-card" id={`source-card-${rank}`}>
       <div className="source-card-header" onClick={() => setExpanded(v => !v)}>
         <span className="source-rank">#{rank}</span>
+        {source.filename && (
+          <span className="source-filename" title={source.filename}>
+            📁 {source.filename}
+          </span>
+        )}
         <span
           className="source-type-badge"
           style={{ '--badge-color': typeMeta.color }}
@@ -291,14 +384,22 @@ function SourceCard({ source, rank }) {
         </span>
         <span className="source-page">Page {source.page + 1}</span>
         <span className="source-score">
-          {(source.relevance_score * 100).toFixed(1)}% match
+          {(source.relevance_score * 100).toFixed(1)}%
         </span>
         <span className="source-expand-icon">{expanded ? '▲' : '▼'}</span>
       </div>
 
       {expanded && (
         <div className="source-card-body">
-          <p className="source-preview">{source.text_preview || '(no preview)'}</p>
+          <div className="source-preview markdown-body">
+            {source.text_preview ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {source.text_preview}
+              </ReactMarkdown>
+            ) : (
+              '(no preview)'
+            )}
+          </div>
           <div className="source-meta-grid">
             <span className="source-meta-item">
               <strong>Chunk ID</strong>
@@ -321,21 +422,31 @@ function SourceCard({ source, rank }) {
   );
 }
 
-function DebugPanel({ sources, route, latency }) {
+function DebugPanel({ sources, route, latency, tokenUsage }) {
   return (
     <div className="debug-panel">
-      <h4 className="debug-heading">🔬 Raw Retrieval Debug</h4>
+      <h4 className="debug-heading">🔬 Pipeline Debug</h4>
       <div className="debug-latency-row">
         <span>Embed: <strong>{latency?.query_embed_ms?.toFixed(0) ?? '—'} ms</strong></span>
         <span>Retrieve: <strong>{latency?.retrieval_ms?.toFixed(0) ?? '—'} ms</strong></span>
+        <span>Rerank: <strong>{latency?.reranking_ms?.toFixed(0) ?? '—'} ms</strong></span>
+        <span>LLM: <strong>{latency?.llm_ms?.toFixed(0) ?? '—'} ms</strong></span>
         <span>Route: <strong>{route}</strong></span>
       </div>
+      {tokenUsage && (
+        <div className="debug-latency-row">
+          <span>Input tokens: <strong>{tokenUsage.input_tokens ?? 0}</strong></span>
+          <span>Output tokens: <strong>{tokenUsage.output_tokens ?? 0}</strong></span>
+          <span>Total tokens: <strong>{tokenUsage.total_tokens ?? 0}</strong></span>
+        </div>
+      )}
       <div className="debug-table-wrapper">
         <table className="debug-table">
           <thead>
             <tr>
               <th>#</th>
               <th>Chunk ID</th>
+              <th>File</th>
               <th>Type</th>
               <th>Page</th>
               <th>Score</th>
@@ -347,6 +458,7 @@ function DebugPanel({ sources, route, latency }) {
               <tr key={src.chunk_id}>
                 <td>{i + 1}</td>
                 <td><code title={src.chunk_id}>{src.chunk_id.slice(0, 10)}…</code></td>
+                <td className="debug-preview">{src.filename || '—'}</td>
                 <td>{src.chunk_type}</td>
                 <td>{src.page + 1}</td>
                 <td>{(src.relevance_score * 100).toFixed(1)}%</td>
