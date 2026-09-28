@@ -20,6 +20,7 @@ All transitions are logged with structlog: document_id, job_id, status, timestam
 from __future__ import annotations
 
 import json
+import shutil
 import traceback
 from pathlib import Path
 from typing import Any
@@ -230,3 +231,20 @@ async def run_ingestion(
             DocumentStatus.FAILED,
             error_message=error_msg,
         )
+
+    finally:
+        # ── Step 11: Cleanup invalid cache folders ────────────────────────────
+        if ade_output_dir.exists():
+            # A valid cache MUST have both of these files
+            is_valid_cache = chunks_path.exists() and raw_path.exists()
+            
+            if not is_valid_cache:
+                import time
+                # Attempt to delete, with a small retry for Windows file locks
+                try:
+                    shutil.rmtree(ade_output_dir)
+                except OSError:
+                    time.sleep(0.5)  # Wait for file handles to be released
+                    shutil.rmtree(ade_output_dir, ignore_errors=True)
+                    
+                log.info("Cleaned up invalid/empty ADE output folder", path=str(ade_output_dir))
