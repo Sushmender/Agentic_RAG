@@ -67,6 +67,11 @@ async def run_ingestion(
     raw_path = ade_output_dir / "raw.json"
     md_path = ade_output_dir / "document.md"
 
+    # ── Step 0: Invalidate Redis cache for this document (Day 6) ─────────────
+    # Clear cached Q&As before re-ingesting so stale answers are not served.
+    from app.services import cache_service
+    await cache_service.invalidate_document_cache(document_id)
+
     # ── Step 1: Transition to processing ─────────────────────────────────────
     job_store.update_status(
         job_id,

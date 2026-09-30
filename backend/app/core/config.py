@@ -61,6 +61,7 @@ class Settings(BaseSettings):
 
     # ── Redis (Upstash) ──────────────────────────────────────────────────────
     REDIS_URL: str = Field(default="redis://localhost:6379", description="Redis connection URL (rediss:// for Upstash TLS)")
+    CACHE_TTL_SECONDS: int = Field(default=3600, description="Redis cache TTL in seconds (default 1 hour)")
 
     # ── ChromaDB ─────────────────────────────────────────────────────────────
     CHROMA_DB_PATH: str = "./data/chroma_db"

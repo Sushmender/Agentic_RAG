@@ -1,16 +1,19 @@
 """
 backend/app/api/v1/endpoints/query.py
-Query endpoint — complete multimodal RAG pipeline (Day 5).
+Query endpoint — complete multimodal RAG pipeline (Day 5 + Day 6 cache).
 
 Full pipeline:
-  Route → Embed query → Retrieve Top-N → Rerank Top-K → Assemble context
-  → Generate grounded answer → Return QueryResponse
+  Cache check → Route → Embed query → Retrieve Top-N → Rerank Top-K
+  → Assemble context → Generate grounded answer → Cache store → Return QueryResponse
+
+Cache (Day 6):
+  - Check Redis before pipeline. If hit, return immediately with cache_hit=True.
+  - After generation, store result in Redis.
+  - Graceful degradation: if Redis is down, pipeline continues without caching.
 
 Reranker failure handling:
   If the reranker fails, we log the error and fall back to raw retrieval
-  order (unranked Top-N → assemble context → still generate an answer).
-
-Day 6: Redis cache check before pipeline.
+  order (unranked Top-N -> assemble context -> still generate an answer).
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ from app.schemas.query import (
     RouteType,
     Source,
 )
+from app.services import cache_service
 from app.services.context_assembly import assemble_context, _clean_text
 from app.services.llm_service import generate_answer
 from app.services.query_router import route_query
@@ -91,6 +95,22 @@ async def query(
         log = log.bind(document_ids=request.document_ids)
 
     log.info("Query pipeline started")
+
+    # ── Step 0: Cache check (Day 6) ───────────────────────────────────────────
+    cache_check_start = time.monotonic()
+    cached = await cache_service.get_cached_response(
+        user_id=user_id,
+        document_ids=request.document_ids,
+        query=request.query,
+    )
+    cache_check_ms = round((time.monotonic() - cache_check_start) * 1000, 1)
+
+    if cached is not None:
+        log.info("Serving from cache", cache_check_ms=cache_check_ms)
+        cached.latency.cache_check_ms = cache_check_ms
+        return cached
+
+    log.info("Cache miss", cache_check_ms=cache_check_ms)
 
     # ── Step 1: Route ─────────────────────────────────────────────────────────
     route = route_query(request.query)
@@ -264,7 +284,7 @@ async def query(
         for i, chunk in enumerate(assembled.selected_chunks)
     ]
 
-    return QueryResponse(
+    response = QueryResponse(
         answer=llm_result.answer,
         sources=sources,
         route_type=route,
@@ -273,7 +293,7 @@ async def query(
         provider_used=llm_result.provider_used,
         latency=LatencyBreakdown(
             total_ms=total_ms,
-            cache_check_ms=0.0,
+            cache_check_ms=cache_check_ms,
             query_embed_ms=embed_ms,
             retrieval_ms=retrieval_ms,
             reranking_ms=rerank_ms,
@@ -286,6 +306,16 @@ async def query(
         },
         cost_usd=llm_result.cost_usd,
     )
+
+    # ── Step 7: Store in cache (Day 6) ──────────────────────────────────
+    await cache_service.set_cached_response(
+        user_id=user_id,
+        document_ids=request.document_ids,
+        query=request.query,
+        response=response,
+    )
+
+    return response
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -341,3 +371,37 @@ def _chunk_to_source(chunk: RetrievalResult, rank: int) -> Source:
         relevance_score=chunk.similarity_score,
         filename=filename,
     )
+
+
+# ── History endpoint (Day 6) ──────────────────────────────────────────────────
+
+@router.get(
+    "/history",
+    summary="List cached Q&A pairs for the current user",
+    description=(
+        "Returns all cached query-answer pairs stored in Redis for the current user. "
+        "Optionally filter to a specific document via the `document_id` query parameter. "
+        "Returns an empty list if nothing is cached or Redis is unavailable."
+    ),
+)
+async def get_query_history(
+    document_id: Optional[str] = None,
+    user_id: str = Depends(get_current_user_id),
+) -> list[dict]:
+    """
+    GET /query/history
+    Returns cached Q&A pairs for the authenticated user.
+    """
+    document_ids = [document_id] if document_id else None
+    pairs = await cache_service.list_user_qa_pairs(
+        user_id=user_id,
+        document_ids=document_ids,
+    )
+    # Serialise QueryResponse objects to dicts for JSON response
+    return [
+        {
+            "field_key": p["field_key"],
+            "response": p["response"].model_dump(),
+        }
+        for p in pairs
+    ]

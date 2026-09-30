@@ -1,7 +1,7 @@
 # Test Run Guide — Multimodal RAG Platform (Days 0–5)
 
-> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · **Day 5 Reranking + Context Assembly + LLM Generation**  
-> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B)
+> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · **Day 6 Redis Cache Pipeline**  
+> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B) · Redis / Upstash
 
 ---
 
@@ -1110,6 +1110,414 @@ INFO  Query pipeline complete    provider=openrouter  model=nvidia/nemotron-3-su
 
 ---
 
+## Day 6 — Redis Query-Answer Cache
+
+> [!IMPORTANT]
+> **What Day 6 added:** Every answer coming out of the full LLM pipeline is now cached in Redis
+> (Upstash) as a Hash. On the **next identical query** from the same user, the pipeline is skipped
+> entirely and the answer is returned directly from Redis — typical latency drops from ~3 s to ~30 ms.
+>
+> - **Cache check** happens before Step 1 (routing). Cache hit → instant return.
+> - **Cache store** happens after Step 6 (LLM generation). Fresh answer → written to Redis.
+> - **Cache invalidation** fires when a document is re-ingested — stale answers are deleted first.
+> - **Graceful degradation:** if Redis is down, the pipeline runs normally. No crash, no 500.
+> - **New endpoint:** `GET /query/history` — list all cached Q&A pairs for the logged-in user.
+
+---
+
+### Why Redis? Why a Hash? Why TTL?
+
+| Question | Answer |
+|---|---|
+| **Why Redis?** | Sub-millisecond reads. The embedding + rerank + LLM pipeline takes 2–4 s per query. Caching makes repeat queries feel instant. |
+| **Why a Hash?** | One Hash key per user+document holds *all* their questions as fields. Efficient — one `HGET` per query lookup, one `HGETALL` for history. |
+| **Why SHA-256 for field names?** | Normalises casing and whitespace (`"Revenue?"` = `"revenue?"`) into a fixed-length key regardless of question length. |
+| **Why TTL on the whole key?** | Redis only supports TTL on keys, not individual Hash fields. Setting `EXPIRE` on every write gives sliding TTL — the key lives as long as the user stays active. |
+| **Why 3600 s (1 hour)?** | Balances freshness vs speed. Configurable via `CACHE_TTL_SECONDS` in `.env`. |
+
+---
+
+### How the Cache Key Is Built
+
+```
+KEY    →  user:{user_id}:qa:{doc_key}
+FIELD  →  SHA-256( query.lower().strip() )
+VALUE  →  QueryResponse JSON (cache_hit stored as false; set to true on read)
+
+Examples:
+  user:alice:qa:__all__          ← no document filter (searched all docs)
+  user:alice:qa:abc123def456     ← filtered to a single document
+  user:bob:qa:__all__            ← separate namespace per user
+```
+
+```
+Redis Database (Upstash — RAG-qa-store)
+│
+└── KEY: user:alice:qa:__all__                 TTL: 60 min
+    │   Type: HASH  |  Length: N (one field per unique question)
+    │
+    ├── FIELD: sha256("what is total revenue?")  → { answer, sources, latency, ... }
+    ├── FIELD: sha256("show me the table")         → { answer, sources, latency, ... }
+    └── FIELD: sha256("who wrote this report?")    → { answer, sources, latency, ... }
+```
+
+---
+
+### How the Full Pipeline Changes in Day 6
+
+```
+POST /query  →  "What is the total revenue?"
+        ↓
+[Step 0]  Cache check  →  Redis HGET  (< 30 ms)
+          HIT  →  return instantly  ⚡ cache_hit=true  (pipeline ends here)
+          MISS →  continue to Step 1
+        ↓
+[Step 1]  Route   →  text
+[Step 2]  Embed   →  NVIDIA Nemotron (~1–2 s)
+[Step 3]  Retrieve Top-20  →  ChromaDB (~40 ms)
+[Step 4]  Rerank Top-5  →  NVIDIA Reranker (~380 ms)
+[Step 5]  Assemble context  →  token-budgeted grounded prompt
+[Step 6]  Generate  →  Groq Qwen 3.8 27B (~1.2 s)
+        ↓
+[Step 7]  Cache store  →  Redis HSET + EXPIRE  (async, < 5 ms)
+        ↓
+        Return  QueryResponse  cache_hit=false
+```
+
+---
+
+### 6.1 Automated Tests
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+
+# Day 6 cache unit tests only (17 tests, all mocked, < 10s)
+.venv\Scripts\python.exe -m pytest tests/test_cache.py -v
+
+# Full suite Days 0–6 (101 pass, 1 pre-existing ADE fixture error)
+.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/test_redis.py -v
+```
+
+**Expected Day 6 cache test output:**
+```
+tests/test_cache.py::test_cache_key_format                              PASSED
+tests/test_cache.py::test_cache_key_all_docs                            PASSED
+tests/test_cache.py::test_field_key_normalisation                       PASSED
+tests/test_cache.py::test_doc_key_none_returns_all                      PASSED
+tests/test_cache.py::test_doc_key_single_doc                            PASSED
+tests/test_cache.py::test_doc_key_multi_docs_returns_all                PASSED
+tests/test_cache.py::test_cache_miss_returns_none                       PASSED
+tests/test_cache.py::test_cache_hit_returns_response                    PASSED
+tests/test_cache.py::test_cache_hit_stamps_cache_hit_true               PASSED
+tests/test_cache.py::test_cache_set_stores_response                     PASSED
+tests/test_cache.py::test_cache_set_stored_value_has_cache_hit_false    PASSED
+tests/test_cache.py::test_cache_invalidation_calls_scan_delete          PASSED
+tests/test_cache.py::test_list_user_qa_pairs_returns_all_entries        PASSED
+tests/test_cache.py::test_list_user_qa_pairs_empty_when_no_cache        PASSED
+tests/test_cache.py::test_get_cached_response_degrades_gracefully       PASSED
+tests/test_cache.py::test_set_cached_response_degrades_gracefully       PASSED
+tests/test_cache.py::test_invalidate_document_cache_degrades_gracefully PASSED
+
+17 passed in < 10s
+```
+
+**Overall after Day 6:** `101 passed, 1 error` (the 1 error is `test_ade.py::test_parse_sample` — pre-existing fixture issue since Day 2, unrelated to Day 6).
+
+### 6.2 Ask a Question — Cache Miss (First Query)
+
+1. Start backend and frontend (same commands as Days 0–5)
+2. Log in at **http://localhost:5173**
+3. Navigate to **💬 Ask a Question**
+4. Type a question and click **🔍 Ask Question**
+
+**Expected on first query (cache miss):**
+
+```
+📝 Text  ⚡ Groq  qwen/qwen3.8-27b  560 tokens  $0.0003   ⏱ 2850 ms   5 sources
+┌─────────────────────────────────────────────────────────────────────┐
+│ Total revenue in Q3 was $4.2 billion... [Source 1]                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+- No ⚡ badge → fresh pipeline run
+- `cache_hit: false` in the JSON response
+- Backend logs show all 7 steps
+
+**Backend log — cache miss:**
+```
+INFO  Query pipeline started    user_id=alice  query_preview="What is the total revenue?"
+INFO  Cache miss                cache_check_ms=28.0
+INFO  Query routed              route=text
+... (embed → retrieve → rerank → assemble → generate) ...
+INFO  Groq generation complete  latency_ms=1227.5
+INFO  Cache stored              doc_key=__all__
+INFO  Query pipeline complete   total_ms=2850.2
+```
+
+### 6.3 Ask the Same Question Again — Cache Hit
+
+Ask the exact same question (same wording, any casing — `"Revenue?"` = `"revenue?"`).
+
+**Expected on second query (cache hit):**
+
+```
+⚡ Instant (cached)   📝 Text   ⏱ 31 ms   5 sources
+┌─────────────────────────────────────────────────────────────────────┐
+│ Total revenue in Q3 was $4.2 billion... [Source 1]                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+- **⚡ Instant (cached)** amber badge appears with a pulse animation
+- Total latency drops from ~2850 ms → ~31 ms
+- `cache_hit: true` in the JSON response
+- Pipeline steps 1–6 are skipped entirely
+
+**Backend log — cache hit:**
+```
+INFO  Query pipeline started    user_id=alice  query_preview="What is the total revenue?"
+INFO  Cache HIT                 doc_key=__all__
+INFO  Serving from cache        cache_check_ms=31.0
+```
+
+> [!TIP]
+> The ⚡ badge has a one-shot amber pulse animation on appearance so it's immediately
+> obvious that this result came from cache, not a fresh pipeline run.
+
+### 6.4 Cache Invalidation — Re-upload a Document
+
+Re-upload any document that was previously queried.
+
+**Expected backend log during re-ingestion:**
+```
+INFO  Cache invalidated   document_id=abc123  keys_deleted=1
+INFO  Ingestion started   status=processing
+```
+
+After re-ingestion completes, asking the same question again will be a **cache miss** — the pipeline runs fresh and the new chunks are used.
+
+> [!IMPORTANT]
+> Invalidation fires **before** new chunks are written to ChromaDB. This ensures no
+> stale cached answer is ever served while new content is being indexed.
+
+### 6.5 API — Cache Hit Response vs Miss Response
+
+**First call (miss):**
+```json
+{
+  "answer": "Total revenue in Q3 was $4.2 billion... [Source 1]",
+  "cache_hit": false,
+  "latency": {
+    "total_ms": 2850.2,
+    "cache_check_ms": 28.0,
+    "query_embed_ms": 1198.4,
+    "retrieval_ms": 44.2,
+    "reranking_ms": 380.1,
+    "llm_ms": 1227.5
+  },
+  "model_used": "qwen/qwen3.8-27b",
+  "provider_used": "groq"
+}
+```
+
+**Second call (hit):**
+```json
+{
+  "answer": "Total revenue in Q3 was $4.2 billion... [Source 1]",
+  "cache_hit": true,
+  "latency": {
+    "total_ms": 31.0,
+    "cache_check_ms": 31.0,
+    "query_embed_ms": 0.0,
+    "retrieval_ms": 0.0,
+    "reranking_ms": 0.0,
+    "llm_ms": 0.0
+  },
+  "model_used": "qwen/qwen3.8-27b",
+  "provider_used": "groq"
+}
+```
+
+**Key differences:**
+
+| Field | Miss | Hit |
+|---|---|---|
+| `cache_hit` | `false` | `true` |
+| `latency.total_ms` | ~2850 ms | ~31 ms |
+| `latency.cache_check_ms` | ~28 ms | ~31 ms |
+| `latency.query_embed_ms` | ~1198 ms | `0.0` |
+| `latency.llm_ms` | ~1228 ms | `0.0` |
+| Frontend badge | *(none)* | ⚡ Instant (cached) |
+
+### 6.6 API — Query History Endpoint
+
+```powershell
+# Get token
+$loginResult = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/auth/login" `
+  -Method POST -ContentType "application/x-www-form-urlencoded" `
+  -Body "username=yourusername&password=yourpassword"
+$token = $loginResult.access_token
+
+# List all cached Q&A pairs for this user (all documents)
+$history = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query/history" `
+  -Headers @{ Authorization = "Bearer $token" }
+$history.Count
+$history[0].response.answer
+
+# Filter to a specific document
+$history2 = Invoke-RestMethod `
+  -Uri "http://localhost:8000/api/v1/query/history?document_id=<doc_id>" `
+  -Headers @{ Authorization = "Bearer $token" }
+```
+
+**Expected response shape:**
+```json
+[
+  {
+    "field_key": "fde76c309ea5ba6fb7ccb2b04e11ee7f...",
+    "response": {
+      "answer": "Total revenue was $100M...",
+      "cache_hit": false,
+      "model_used": "qwen/qwen3.8-27b",
+      "provider_used": "groq",
+      "latency": { ... },
+      "sources": [ ... ]
+    }
+  }
+]
+```
+
+> [!NOTE]
+> `field_key` is the SHA-256 fingerprint of the original query.
+> If the user has asked 3 questions, the list will have 3 entries.
+> Returns `[]` if Redis is down (graceful degradation).
+
+### 6.7 Swagger (`GET /query/history`)
+
+1. Go to **http://localhost:8000/docs**
+2. Authorize with JWT
+3. Find `GET /api/v1/query/history`
+4. Execute with no params → returns all cached pairs
+5. Execute with `document_id=<id>` → returns only pairs for that document
+
+### 6.8 PowerShell Verification Commands
+
+```powershell
+# Get token
+$loginResult = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/auth/login" `
+  -Method POST -ContentType "application/x-www-form-urlencoded" `
+  -Body "username=yourusername&password=yourpassword"
+$token = $loginResult.access_token
+
+# First query — expect cache_hit=false, latency ~2850 ms
+$r1 = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query" `
+  -Method POST `
+  -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+  -Body '{"query": "What is the total revenue?"}'
+$r1 | Select-Object cache_hit, @{n="total_ms";e={$_.latency.total_ms}}
+
+# Same query again — expect cache_hit=true, latency ~30 ms
+$r2 = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query" `
+  -Method POST `
+  -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+  -Body '{"query": "What is the total revenue?"}'
+$r2 | Select-Object cache_hit, @{n="total_ms";e={$_.latency.total_ms}}
+
+# History — count cached Q&A pairs
+$h = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/query/history" `
+  -Headers @{ Authorization = "Bearer $token" }
+"Cached pairs: $($h.Count)"
+```
+
+**Expected outputs:**
+```
+# First call
+cache_hit  total_ms
+---------  --------
+False      2850.2
+
+# Second call (cache hit)
+cache_hit  total_ms
+---------  --------
+True       31.0
+
+# History
+Cached pairs: 1
+```
+
+### 6.9 Reading the Cache in Upstash Data Browser
+
+Open your Upstash console → **Data Browser** tab.
+
+```
+Key:   user:alice:qa:__all__
+Type:  HASH
+TTL:   52m 12s              ← auto-expires, no manual cleanup needed
+Size:  1.2 KB
+Length: 1                   ← number of cached Q&A pairs
+
+Field  →  fde76c309ea5ba6fb7ccb2b04e11ee7f...   (SHA-256 of query)
+Value  →  {"answer":"Total revenue was $100M...", ...}
+```
+
+> [!NOTE]
+> TTL resets to 1 hour every time a new answer is cached under that key.
+> After 1 hour of inactivity, the entire key expires automatically.
+
+### 6.10 Log Reading Guide — Day 6 Cache Pipeline
+
+**Full log for cache miss (pipeline runs):**
+```
+INFO  Query pipeline started     user_id=alice  query_preview="What is the total revenue?"
+
+# Step 0: Cache check (~28 ms)
+INFO  Cache MISS                 doc_key=__all__
+INFO  Cache miss                 cache_check_ms=28.0
+
+# Steps 1–6: Full pipeline (same as Day 5)
+INFO  Query routed               route=text
+INFO  Query embedded             embed_ms=1198.4
+INFO  Retrieval complete         results_count=20
+INFO  Reranking complete         returned=5
+INFO  Context assembled          chunks_selected=5
+INFO  Groq generation complete   latency_ms=1227.5
+
+# Step 7: Cache store (~3 ms)
+INFO  Cache stored               doc_key=__all__  ttl_s=3600
+
+INFO  Query pipeline complete    total_ms=2850.2  cache_hit=False
+```
+
+**Full log for cache hit (pipeline skipped):**
+```
+INFO  Query pipeline started     user_id=alice  query_preview="What is the total revenue?"
+
+# Step 0: Cache HIT (~31 ms)
+INFO  Cache HIT                  doc_key=__all__
+INFO  Serving from cache         cache_check_ms=31.0
+
+# Steps 1–7 are completely skipped
+INFO  HTTP request               status_code=200  latency_ms=31.0
+```
+
+**Cache invalidation log (during re-ingestion):**
+```
+INFO  Cache invalidated          document_id=abc123  keys_deleted=1
+INFO  Ingestion started          status=processing
+```
+
+### 6.11 Error Cases
+
+| Test | Expected |
+|---|---|
+| No `Authorization` header on `/query/history` | `401 Unauthorized` |
+| Redis is down / unreachable | Cache silently skipped — full pipeline runs, `200 OK` returned |
+| Redis down during invalidation | `keys_deleted=0` logged, ingestion continues normally |
+| Same query, different user | Different Hash key — no cross-user cache leakage |
+| Same query, different document filter | Different Hash key (`qa:doc_abc` vs `qa:__all__`) — separate cache entries |
+| Ask after TTL expires (>1 hour) | Cache miss — pipeline runs fresh |
+
+---
+
 ## Pipeline Status — What Is Built vs What Remains
 
 | Day | Feature | Status |
@@ -1120,7 +1528,7 @@ INFO  Query pipeline complete    provider=openrouter  model=nvidia/nemotron-3-su
 | 3 | Embeddings + Index: OpenRouter NVIDIA embeddings, ChromaDB indexing, idempotency | ✅ Built |
 | 4 | Router + Retrieval: query router (text/multimodal/hybrid), Top-N candidates via ChromaDB | ✅ Built |
 | 5 | Rerank + LLM: OpenRouter reranker, context assembly, Qwen 3.8 27B + Nemotron fallback, grounded answer | ✅ **Built** |
-| 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion | Not built |
+| 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion, `/query/history` endpoint, ⚡ cache-hit badge | ✅ **Built** |
 | 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint | Not built |
 | 8 | Evaluation + Hardening: Recall@K / Precision@K, Docker Compose, rate limiting, full polish | Not built |
 
@@ -1156,4 +1564,12 @@ INFO  Query pipeline complete    provider=openrouter  model=nvidia/nemotron-3-su
 | `QueryPage.jsx` (Day 5 updates) | Day 5 | Provider dropdown, `ModelBadge`, filename in source cards, full latency debug |
 | `QueryPage.css` (Day 5 updates) | Day 5 | `.provider-dropdown`, `.model-badge`, `.source-filename` styles |
 | `tests/test_query_pipeline.py` | Day 5 | 21 mocked integration tests — full pipeline, fallback, reranker failure |
+| `core/config.py` (`CACHE_TTL_SECONDS`) | Day 6 | Configurable cache TTL (default 3600 s = 1 hour) via `.env` |
+| `services/cache_service.py` | Day 6 | Full Redis Hash cache — get/set/invalidate/list, key normalisation (SHA-256), graceful degradation |
+| `POST /query` (Step 0 + Step 7) | Day 6 | Cache check before pipeline; cache store after generation |
+| `GET /query/history` | Day 6 | Lists all cached Q&A pairs for the authenticated user, optional `document_id` filter |
+| `services/ingestion_service.py` (Step 0) | Day 6 | `invalidate_document_cache()` fires at the start of every ingestion run |
+| `QueryPage.jsx` (cache badge) | Day 6 | ⚡ Instant (cached) amber badge with pulse animation when `cache_hit=true` |
+| `QueryPage.css` (`.cache-hit-badge`) | Day 6 | Amber gradient badge, `cache-pulse` keyframe animation |
+| `tests/test_cache.py` | Day 6 | 17 mocked unit tests — key format, miss/hit, store, invalidation, list, graceful degradation |
 

@@ -803,3 +803,32 @@
 .markdown-body p:last-child {
   margin-bottom: 0;
 }
+
+/* ── Cache hit badge (Day 6) ─────────────────────────────────────────────── */
+@keyframes cache-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.55); }
+  60%  { box-shadow: 0 0 0 8px rgba(251, 191, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+}
+
+.cache-hit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.22), rgba(245, 158, 11, 0.14));
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  border-radius: 999px;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: default;
+  animation: cache-pulse 1.4s ease-out 1;
+  transition: background 0.2s;
+}
+
+.cache-hit-badge:hover {
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.32), rgba(245, 158, 11, 0.22));
+}

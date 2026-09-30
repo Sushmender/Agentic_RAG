@@ -217,8 +217,13 @@ export default function QueryPage() {
       {!loading && result && (
         <div className="query-results">
 
-          {/* Meta row: route + latency + reranker count + model badge */}
+          {/* Meta row: cache badge + route + latency + reranker count + model badge */}
           <div className="result-meta-row">
+            {result.cache_hit && (
+              <span className="cache-hit-badge" title="Answer served from Redis cache">
+                ⚡ Instant (cached)
+              </span>
+            )}
             <RouteTag route={result.route_type} />
             {result.model_used && (
               <ModelBadge
@@ -239,6 +244,16 @@ export default function QueryPage() {
           {/* Answer box */}
           <AnswerBox answer={result.answer} hasModel={!!result.model_used} />
 
+          {/* Debug panel */}
+          {showDebug && (
+            <DebugPanel
+              sources={result.sources}
+              route={result.route_type}
+              latency={result.latency}
+              tokenUsage={result.token_usage}
+            />
+          )}
+
           {/* Source cards (citations below answer) */}
           {result.sources.length > 0 && (
             <div className="sources-section">
@@ -252,16 +267,6 @@ export default function QueryPage() {
                 ))}
               </div>
             </div>
-          )}
-
-          {/* Debug panel */}
-          {showDebug && (
-            <DebugPanel
-              sources={result.sources}
-              route={result.route_type}
-              latency={result.latency}
-              tokenUsage={result.token_usage}
-            />
           )}
 
           {/* Empty candidates */}

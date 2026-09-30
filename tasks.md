@@ -277,45 +277,41 @@
 ## Day 6 — Redis Query-Answer Cache
 
 ### Backend
-- [ ] Implement full `backend/app/db/redis_client.py`:
-  - `redis.asyncio.Redis` client using `REDIS_URL` from config
-  - `async_ping()` — liveness check
-  - `get(key)` / `set(key, value, ttl)` / `delete(key)` / `delete_pattern(pattern)` wrappers
-- [ ] Implement full `backend/app/db/redis_client.py`:
+- [x] Implement full `backend/app/db/redis_client.py`:
   - Upstash Redis connection via `REDIS_URL` from config (TLS `rediss://` URL)
   - `redis.asyncio.Redis.from_url(REDIS_URL)` client
   - Hash structure: `user:{user_id}:qa:{doc_id}` — fields: `question`, `answer`
   - `async_ping()` — liveness check
   - `hset(key, field, value)` / `hget(key, field)` / `hgetall(key)` wrappers
   - `scan_delete_pattern(pattern)` using `SCAN` (never `KEYS`) for cache invalidation
-- [ ] Create `backend/app/services/cache_service.py`:
+- [x] Create `backend/app/services/cache_service.py`:
   - Cache key: `user:{user_id}:qa:{document_id}` (Redis Hash per user+document)
   - Field key: `SHA-256(normalize(query))` where normalize = lowercase + strip whitespace
   - `get_cached_response(user_id, document_id, query)` → `HGET` → returns `QueryResponse` if hit, else `None`
   - `set_cached_response(user_id, document_id, query, response)` → `HSET` on hash key
   - `invalidate_document_cache(document_id)` → `SCAN` for all `*:qa:{document_id}` keys → `DEL` each
   - `list_user_qa_pairs(user_id, document_id)` → `HGETALL user:{user_id}:qa:{document_id}` → return all Q&A pairs
-- [ ] Integrate cache into `POST /query` endpoint:
+- [x] Integrate cache into `POST /query` endpoint:
   - Require authenticated `user_id` from JWT header before any cache operation
   - Before pipeline: check cache → if hit, return immediately with `cache_hit=True`
   - After pipeline: store result in cache
   - Add `cache_hit: bool` field to `QueryResponse`
-- [ ] Trigger `invalidate_document_cache(document_id)` when document is re-ingested
-- [ ] Add cache hit/miss to structured logs with user_id + document_id (not full query text)
-- [ ] Create `backend/tests/test_cache.py` — test cache hit, miss, invalidation, key normalization, `list_user_qa_pairs`
+- [x] Trigger `invalidate_document_cache(document_id)` when document is re-ingested
+- [x] Add cache hit/miss to structured logs with user_id + document_id (not full query text)
+- [x] Create `backend/tests/test_cache.py` — test cache hit, miss, invalidation, key normalization, `list_user_qa_pairs`
 
 ### Frontend
-- [ ] Show cache hit badge in answer header: `⚡ Instant answer (cached)`
-- [ ] Optionally show cache TTL remaining (if returned by API)
-- [ ] Differentiate cached vs. fresh answers visually
+- [x] Show cache hit badge in answer header: `⚡ Instant answer (cached)`
+- [x] Optionally show cache TTL remaining (if returned by API)
+- [x] Differentiate cached vs. fresh answers visually
 
 ### Verification
-- [ ] Ask same question twice → second response is instant, `cache_hit=true` in response
-- [ ] Different questions → both cache misses, both stored in Redis
-- [ ] Re-upload same document → cache invalidated → next query is a cache miss
-- [ ] Cache key includes user_id (or anonymous session) → different users get separate caches
-- [ ] `CACHE_TTL_SECONDS` respected (key expires after TTL)
-- [ ] `pytest backend/tests/test_cache.py` passes
+- [x] Ask same question twice → second response is instant, `cache_hit=true` in response
+- [x] Different questions → both cache misses, both stored in Redis
+- [x] Re-upload same document → cache invalidated → next query is a cache miss
+- [x] Cache key includes user_id (or anonymous session) → different users get separate caches
+- [x] `CACHE_TTL_SECONDS` respected (key expires after TTL)
+- [x] `pytest backend/tests/test_cache.py` passes
 
 ---
 

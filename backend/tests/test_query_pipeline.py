@@ -142,6 +142,16 @@ def make_all_patches(
             "app.services.llm_service.openrouter_llm_provider.generate",
             AsyncMock(return_value=FAKE_LLM_RESPONSE_OPENROUTER),
         ),
+        # Day 6: always bypass the live Redis cache in pipeline tests
+        # so each test exercises the full pipeline, not a cached result.
+        patch(
+            "app.services.cache_service.get_cached_response",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "app.services.cache_service.set_cached_response",
+            AsyncMock(return_value=None),
+        ),
     ]
     return patchers
 
@@ -396,6 +406,11 @@ class TestRerankerTopK:
                   AsyncMock(return_value=FAKE_LLM_RESPONSE_GROQ)),
             patch("app.services.llm_service.openrouter_llm_provider.generate",
                   AsyncMock(return_value=FAKE_LLM_RESPONSE_OPENROUTER)),
+            # Day 6: bypass live Redis cache so the reranker is actually called
+            patch("app.services.cache_service.get_cached_response",
+                  AsyncMock(return_value=None)),
+            patch("app.services.cache_service.set_cached_response",
+                  AsyncMock(return_value=None)),
         ]
         [p.start() for p in patchers]
         try:
