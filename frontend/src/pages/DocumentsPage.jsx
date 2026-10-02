@@ -304,11 +304,11 @@ export default function DocumentsPage() {
         );
 
         if (job.status === 'completed') {
-          clearInterval(pollingRefs.current[jobId]);
+          clearInterval(intervalId);
           delete pollingRefs.current[jobId];
           addToast(`✅ "${docResp.data.filename}" processed successfully`, 'success');
         } else if (job.status === 'failed') {
-          clearInterval(pollingRefs.current[jobId]);
+          clearInterval(intervalId);
           delete pollingRefs.current[jobId];
           addToast(`❌ Processing failed: ${job.error_message || 'Unknown error'}`, 'error');
         }

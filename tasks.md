@@ -318,30 +318,30 @@
 ## Day 7 — Observability, Telemetry, Persistent Storage
 
 ### Backend
-- [ ] Update `backend/app/core/logging.py` — inject `request_id` (UUID) into every request via middleware
-- [ ] Add per-stage timing to pipeline: ADE, embedding, retrieval, reranking, LLM, total end-to-end
-- [ ] Create `backend/app/schemas/telemetry.py` — `TelemetryRecord` model capturing all 5 benchmark categories:
+- [x] Update `backend/app/core/logging.py` — inject `request_id` (UUID) into every request via middleware
+- [x] Add per-stage timing to pipeline: ADE, embedding, retrieval, reranking, LLM, total end-to-end
+- [x] Create `backend/app/schemas/telemetry.py` — `TelemetryRecord` model capturing all 5 benchmark categories:
   1. `latency_ms`: `{ total, ade, embedding, retrieval, reranking, llm }`
   2. `token_usage`: `{ input_tokens, output_tokens, total_tokens }`
   3. `ade_credits`: `{ per_ingestion, cumulative }`
   4. `embedding_cost`: `{ model, provider, token_count, cost_usd }`
   5. `llm_cost`: `{ model, provider, input_tokens, output_tokens, cost_usd }`
-- [ ] Persist `TelemetryRecord` to `data/telemetry.jsonl` (append-only JSON Lines)
-- [ ] Replace in-memory `DocumentStore` / `JobStore` with SQLite-backed persistent store using `aiosqlite`:
+- [x] Persist `TelemetryRecord` to `data/telemetry.jsonl` (append-only JSON Lines)
+- [x] Replace in-memory `DocumentStore` / `JobStore` with SQLite-backed persistent store using `aiosqlite`:
   - Tables: `documents`, `jobs`
   - Job status updates survive server restart
-- [ ] Create `backend/app/api/v1/endpoints/metrics.py` — `GET /metrics`:
+- [x] Create `backend/app/api/v1/endpoints/metrics.py` — `GET /metrics`:
   - Aggregate from `data/telemetry.jsonl`
   - Return: avg/p95 latency per stage, total token usage, total cost, ADE credits consumed
-- [ ] Add `RETRY_MAX_ATTEMPTS`, `TIMEOUT_SECONDS` to config — use in all provider clients
-- [ ] Create `backend/tests/test_telemetry.py` — verify all 5 benchmark fields populated per query
+- [x] Add `RETRY_MAX_ATTEMPTS`, `TIMEOUT_SECONDS` to config — use in all provider clients
+- [x] Create `backend/tests/test_telemetry.py` — verify all 5 benchmark fields populated per query
 
 ### Frontend
-- [ ] Add telemetry panel to query results:
+- [x] Add telemetry panel to query results:
   - Latency breakdown bar chart (ADE / Embedding / Retrieval / Reranking / LLM)
   - Token count (input/output)
   - Estimated cost per query
-- [ ] Add metrics dashboard page `MetricsPage.jsx` with:
+- [x] Add metrics dashboard page `MetricsPage.jsx` with:
   - Average end-to-end latency
   - Total queries served
   - Cache hit rate
@@ -349,12 +349,12 @@
   - Total LLM cost
 
 ### Verification
-- [ ] `GET /metrics` returns all 5 benchmark categories with real data
-- [ ] Per-query telemetry logged to `data/telemetry.jsonl`
-- [ ] Job state persists across server restart (SQLite)
-- [ ] All provider calls use retry/timeout from config
-- [ ] Frontend shows latency breakdown per query
-- [ ] `pytest backend/tests/test_telemetry.py` passes
+- [x] `GET /metrics` returns all 5 benchmark categories with real data
+- [x] Per-query telemetry logged to `data/telemetry.jsonl`
+- [x] Job state persists across server restart (SQLite)
+- [x] All provider calls use retry/timeout from config
+- [x] Frontend shows latency breakdown per query
+- [x] `pytest backend/tests/test_telemetry.py` passes
 
 ---
 

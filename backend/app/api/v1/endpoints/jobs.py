@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
-from app.db.in_memory_store import job_store
+from app.db.sqlite_store import job_store
 from app.schemas.job import JobResponse
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
@@ -30,7 +30,7 @@ async def get_job(
     user_id: str = Depends(get_current_user_id),
 ) -> JobResponse:
     """Returns current job status. Raises 404 if job not found, 403 if not owned by user."""
-    job = job_store.get(job_id)
+    job = await job_store.get(job_id)
 
     if job is None:
         raise HTTPException(

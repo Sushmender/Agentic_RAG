@@ -12,16 +12,13 @@ from fastapi import Depends
 
 from app.core.logging import get_logger
 from app.core.security import create_access_token, hash_password, verify_password
+from app.db.sqlite_store import user_store
 from app.schemas.query import UserRegisterRequest, TokenResponse
 from app.schemas.user import UserPublic
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
-
-# In-memory user store for Day 0/1 — replaced by SQLite in Day 7
-_users: dict[str, dict] = {}  # username → user dict
-
 
 @router.post(
     "/register",
@@ -34,7 +31,7 @@ async def register(request: UserRegisterRequest) -> UserPublic:
     import uuid
     from datetime import datetime, timezone
 
-    if request.username in _users:
+    if await user_store.get_by_username(request.username):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Username '{request.username}' already exists.",
@@ -49,7 +46,7 @@ async def register(request: UserRegisterRequest) -> UserPublic:
         "is_active": True,
         "created_at": datetime.now(timezone.utc),
     }
-    _users[request.username] = user
+    await user_store.save(user)
 
     logger.info("User registered", user_id=user_id, username=request.username)
     return UserPublic(**user)
@@ -62,7 +59,7 @@ async def register(request: UserRegisterRequest) -> UserPublic:
 )
 async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> TokenResponse:
     """Authenticate with username+password, return JWT Bearer token."""
-    user = _users.get(form_data.username)
+    user = await user_store.get_by_username(form_data.username)
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

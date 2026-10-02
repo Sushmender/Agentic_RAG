@@ -244,6 +244,9 @@ export default function QueryPage() {
           {/* Answer box */}
           <AnswerBox answer={result.answer} hasModel={!!result.model_used} />
 
+          {/* Performance details panel (Day 7) */}
+          <TelemetryPanel latency={result.latency} tokenUsage={result.token_usage} costUsd={result.cost_usd} />
+
           {/* Debug panel */}
           {showDebug && (
             <DebugPanel
@@ -320,16 +323,16 @@ function ModelBadge({ model, provider, tokens, costUsd }) {
 }
 
 function AnswerBox({ answer, hasModel }) {
-  // Parse [Source X] and turn into clickable badges
+  // Parse [Source X] or 【Source X】 and turn into clickable badges
   const renderAnswerWithCitations = (text) => {
     if (!text) return null;
     
-    // Split by [Source X] or [Source X, Y]
-    // The backend uses [Source 1], etc.
-    const parts = text.split(/(\[Source \d+\])/g);
+    // Split by [Source X] or 【Source X】
+    // The backend uses [Source 1], etc., but some LLMs output full-width brackets.
+    const parts = text.split(/([\[【]Source \d+[\]】])/g);
     
     return parts.map((part, i) => {
-      const match = part.match(/\[Source (\d+)\]/);
+      const match = part.match(/[\[【]Source (\d+)[\]】]/);
       if (match) {
         const sourceNum = match[1];
         return (
@@ -420,6 +423,77 @@ function SourceCard({ source, rank }) {
                 <code>[{source.bbox.map(v => v.toFixed(2)).join(', ')}]</code>
               </span>
             )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TelemetryPanel({ latency, tokenUsage, costUsd }) {
+  const [open, setOpen] = useState(false);
+
+  const stages = [
+    { label: '🔢 Embedding', ms: latency?.query_embed_ms, color: '#6366f1' },
+    { label: '🔍 Retrieval', ms: latency?.retrieval_ms,   color: '#0ea5e9' },
+    { label: '🏆 Reranking', ms: latency?.reranking_ms,  color: '#f59e0b' },
+    { label: '🤖 LLM',       ms: latency?.llm_ms,         color: '#10b981' },
+  ];
+  const maxMs = Math.max(...stages.map(s => s.ms || 0), 1);
+  const fmtMs = (ms) => {
+    if (!ms || ms < 1) return '< 1 ms';
+    if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
+    return `${ms.toFixed(0)} ms`;
+  };
+
+  return (
+    <div className="telemetry-panel">
+      <button className="telemetry-panel__toggle" onClick={() => setOpen(v => !v)} type="button">
+        <span>⚙️ Performance Details</span>
+        <span className="telemetry-panel__total">{fmtMs(latency?.total_ms)} total</span>
+        <span className="telemetry-panel__chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="telemetry-panel__body">
+          <div className="tel-section">
+            <h4 className="tel-section-title">⏱ Latency Breakdown</h4>
+            {stages.map(({ label, ms, color }) => {
+              const pct = Math.min(((ms || 0) / maxMs) * 100, 100);
+              return (
+                <div key={label} className="tel-bar-row">
+                  <span className="tel-bar-label">{label}</span>
+                  <div className="tel-bar-track">
+                    <div className="tel-bar-fill" style={{ width: `${pct}%`, background: color }} />
+                  </div>
+                  <span className="tel-bar-value">{fmtMs(ms)}</span>
+                </div>
+              );
+            })}
+          </div>
+          {tokenUsage && (
+            <div className="tel-section">
+              <h4 className="tel-section-title">🔤 Token Usage</h4>
+              <div className="tel-stats-row">
+                <div className="tel-stat">
+                  <span className="tel-stat__val">{(tokenUsage.input_tokens || 0).toLocaleString()}</span>
+                  <span className="tel-stat__label">Input</span>
+                </div>
+                <div className="tel-stat">
+                  <span className="tel-stat__val">{(tokenUsage.output_tokens || 0).toLocaleString()}</span>
+                  <span className="tel-stat__label">Output</span>
+                </div>
+                <div className="tel-stat tel-stat--accent">
+                  <span className="tel-stat__val">{(tokenUsage.total_tokens || 0).toLocaleString()}</span>
+                  <span className="tel-stat__label">Total</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="tel-section">
+            <h4 className="tel-section-title">💰 Estimated Cost</h4>
+            <div className="tel-cost">
+              {costUsd > 0 ? `$${Number(costUsd).toFixed(6)}` : '$0.000000 (free tier)'}
+            </div>
           </div>
         </div>
       )}

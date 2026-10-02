@@ -293,7 +293,7 @@ async def test_ingestion_pipeline_includes_embedding(ephemeral_chroma, set_test_
     ADE provider and embedding_service.index_chunks() are both mocked.
     """
     import uuid
-    from app.db.in_memory_store import document_store, job_store
+    from app.db.sqlite_store import document_store, job_store
     from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
     from app.schemas.job import Job, JobStatus
     from app.services import embedding_service
@@ -312,12 +312,12 @@ async def test_ingestion_pipeline_includes_embedding(ephemeral_chroma, set_test_
     # Seed document + job records
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
-    document_store.save(DocumentMetadata(
+    await document_store.save(DocumentMetadata(
         document_id=doc_id, filename="test.pdf", document_type=DocumentType.PDF,
         mime_type="application/pdf", file_size_bytes=100, user_id=user_id,
         status=DocumentStatus.PENDING, created_at=now, updated_at=now,
     ))
-    job_store.save(Job(
+    await job_store.save(Job(
         job_id=job_id, document_id=doc_id, user_id=user_id,
         status=JobStatus.PENDING, created_at=now, updated_at=now,
     ))
@@ -357,14 +357,14 @@ async def test_ingestion_pipeline_includes_embedding(ephemeral_chroma, set_test_
             )
 
     # Verify job reached COMPLETED
-    job = job_store.get(job_id)
+    job = await job_store.get(job_id)
     assert job is not None
     assert job.status == JobStatus.COMPLETED, f"Job status: {job.status}, error: {job.error_message}"
     assert job.chunks_created == 2
     assert job.chunks_embedded == 2
 
     # Verify document marked COMPLETED with embedding_model
-    doc = document_store.get(doc_id)
+    doc = await document_store.get(doc_id)
     assert doc is not None
     assert doc.status == DocumentStatus.COMPLETED
     assert doc.chunk_count == 2

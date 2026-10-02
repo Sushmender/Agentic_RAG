@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
-from app.db.in_memory_store import document_store
+from app.db.sqlite_store import document_store
 from app.providers.openrouter_embedding import embedding_provider
 from app.providers.openrouter_reranker import reranker_provider
 from app.schemas.query import (
@@ -36,7 +36,7 @@ from app.schemas.query import (
     RouteType,
     Source,
 )
-from app.services import cache_service
+from app.services import cache_service, telemetry_service
 from app.services.context_assembly import assemble_context, _clean_text
 from app.services.llm_service import generate_answer
 from app.services.query_router import route_query
@@ -108,6 +108,44 @@ async def query(
     if cached is not None:
         log.info("Serving from cache", cache_check_ms=cache_check_ms)
         cached.latency.cache_check_ms = cache_check_ms
+        
+        # ── Append telemetry for cache hit ──────────────────────────────────
+        from app.schemas.telemetry import (
+            TelemetryRecord, LatencyDetail, TokenUsage, EmbeddingCost, LLMCost
+        )
+        _tel_cache = TelemetryRecord(
+            record_type="query",
+            user_id=user_id,
+            query_preview=request.query[:80],
+            route_type=cached.route_type.value,
+            cache_hit=True,
+            latency=LatencyDetail(
+                total_ms=cache_check_ms,
+                embedding_ms=0.0,
+                retrieval_ms=0.0,
+                reranking_ms=0.0,
+                llm_ms=0.0,
+            ),
+            token_usage=TokenUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            ),
+            embedding_cost=EmbeddingCost(
+                model="",
+                provider="",
+                cost_usd=0.0,
+            ),
+            llm_cost=LLMCost(
+                model=cached.model_used,
+                provider=cached.provider_used,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+            ),
+        )
+        await telemetry_service.append_record(_tel_cache)
+        
         return cached
 
     log.info("Cache miss", cache_check_ms=cache_check_ms)
@@ -279,10 +317,11 @@ async def query(
     )
 
     # ── Build sources (from selected chunks after context assembly) ────────────
-    sources = [
-        _chunk_to_source(chunk, rank=i + 1)
-        for i, chunk in enumerate(assembled.selected_chunks)
-    ]
+    import asyncio as _asyncio
+    sources = list(await _asyncio.gather(
+        *[_chunk_to_source(chunk, rank=i + 1)
+          for i, chunk in enumerate(assembled.selected_chunks)]
+    ))
 
     response = QueryResponse(
         answer=llm_result.answer,
@@ -314,6 +353,43 @@ async def query(
         query=request.query,
         response=response,
     )
+
+    # ── Step 8: Append telemetry (Day 7) ────────────────────────────────
+    from app.schemas.telemetry import (
+        TelemetryRecord, LatencyDetail, TokenUsage, EmbeddingCost, LLMCost
+    )
+    _tel = TelemetryRecord(
+        record_type="query",
+        user_id=user_id,
+        query_preview=request.query[:80],
+        route_type=route.value,
+        cache_hit=False,
+        latency=LatencyDetail(
+            total_ms=total_ms,
+            embedding_ms=embed_ms,
+            retrieval_ms=retrieval_ms,
+            reranking_ms=rerank_ms,
+            llm_ms=llm_ms,
+        ),
+        token_usage=TokenUsage(
+            input_tokens=llm_result.input_tokens,
+            output_tokens=llm_result.output_tokens,
+            total_tokens=llm_result.total_tokens,
+        ),
+        embedding_cost=EmbeddingCost(
+            model=settings.EMBEDDING_MODEL,
+            provider="openrouter",
+            cost_usd=0.0,
+        ),
+        llm_cost=LLMCost(
+            model=llm_result.model_used,
+            provider=llm_result.provider_used,
+            input_tokens=llm_result.input_tokens,
+            output_tokens=llm_result.output_tokens,
+            cost_usd=llm_result.cost_usd,
+        ),
+    )
+    await telemetry_service.append_record(_tel)
 
     return response
 
@@ -347,12 +423,12 @@ def _run_retrieval(
         )
 
 
-def _chunk_to_source(chunk: RetrievalResult, rank: int) -> Source:
+async def _chunk_to_source(chunk: RetrievalResult, rank: int) -> Source:
     """Convert a RetrievalResult (post-rerank) into a Source citation."""
     # Resolve filename from document store
     filename = ""
     try:
-        doc = document_store.get(chunk.document_id)
+        doc = await document_store.get(chunk.document_id)
         if doc:
             filename = doc.filename
     except Exception:

@@ -27,7 +27,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.in_memory_store import document_store, job_store
+from app.db.sqlite_store import document_store, job_store
 from app.providers.ade import ade_provider
 from app.schemas.document import DocumentStatus
 from app.schemas.job import JobStatus
@@ -73,12 +73,12 @@ async def run_ingestion(
     await cache_service.invalidate_document_cache(document_id)
 
     # ── Step 1: Transition to processing ─────────────────────────────────────
-    job_store.update_status(
+    await job_store.update_status(
         job_id,
         JobStatus.PROCESSING,
         progress_message="Ingestion started",
     )
-    document_store.update_status(document_id, DocumentStatus.PROCESSING)
+    await document_store.update_status(document_id, DocumentStatus.PROCESSING)
     log.info("Ingestion started", status="processing")
 
     try:
@@ -100,7 +100,7 @@ async def run_ingestion(
         else:
             # ── Step 3: Real ADE call ──────────────────────────────────────────
             log.info("Calling ADE provider (real)", file_path=file_path)
-            job_store.update_status(
+            await job_store.update_status(
                 job_id,
                 JobStatus.PROCESSING,
                 progress_message="Calling ADE parse API",
@@ -133,13 +133,13 @@ async def run_ingestion(
             log.info("Persisted document markdown", path=str(md_path))
 
             # ── Step 5: Normalize chunks ───────────────────────────────────────
-            job_store.update_status(
+            await job_store.update_status(
                 job_id,
                 JobStatus.PROCESSING,
                 progress_message="Normalizing chunks",
             )
             # Get source filename from document record
-            doc = document_store.get(document_id)
+            doc = await document_store.get(document_id)
             source = doc.filename if doc else Path(file_path).name
 
             chunks = normalize_chunks(
@@ -173,7 +173,7 @@ async def run_ingestion(
         )
 
         # ── Step 9: Embed new chunks into ChromaDB ───────────────────────────
-        job_store.update_status(
+        await job_store.update_status(
             job_id,
             JobStatus.PROCESSING,
             progress_message="Embedding chunks into ChromaDB",
@@ -188,7 +188,7 @@ async def run_ingestion(
         )
 
         # ── Step 10: Mark completed ──────────────────────────────────────────
-        job_store.update_status(
+        await job_store.update_status(
             job_id,
             JobStatus.COMPLETED,
             progress_message=(
@@ -198,7 +198,7 @@ async def run_ingestion(
             chunks_created=chunk_count,
             chunks_embedded=embedding_result.new_chunks_indexed,
         )
-        document_store.update_status(
+        await document_store.update_status(
             document_id,
             DocumentStatus.COMPLETED,
             chunk_count=chunk_count,
@@ -215,6 +215,34 @@ async def run_ingestion(
             embedding_model=embedding_result.embedding_model,
         )
 
+        # ── Step 11: Append telemetry record ─────────────────────────────────
+        import time as _time
+        from app.services import telemetry_service
+        from app.schemas.telemetry import (
+            TelemetryRecord, LatencyDetail, ADECredits, EmbeddingCost
+        )
+        _ade_ms = float(ade_meta.get("duration_ms", 0.0))
+        _embed_ms = float(embedding_result.latency_ms or 0.0)
+        _total_ms = _ade_ms + _embed_ms
+        _tel = TelemetryRecord(
+            record_type="ingestion",
+            user_id=user_id,
+            document_id=document_id,
+            latency=LatencyDetail(
+                total_ms=round(_total_ms, 2),
+                ade_ms=round(_ade_ms, 2),
+                embedding_ms=round(_embed_ms, 2),
+            ),
+            ade_credits=ADECredits(per_ingestion=credits_used),
+            embedding_cost=EmbeddingCost(
+                model=embedding_result.embedding_model,
+                provider="openrouter",
+                token_count=getattr(embedding_result, "total_tokens", 0),
+                cost_usd=0.0,  # free tier model
+            ),
+        )
+        await telemetry_service.append_record(_tel)
+
 
     except Exception as exc:
         # ── Error path: mark both job and document as failed ──────────────────
@@ -225,13 +253,13 @@ async def run_ingestion(
             error=error_msg,
             traceback=traceback.format_exc(),
         )
-        job_store.update_status(
+        await job_store.update_status(
             job_id,
             JobStatus.FAILED,
             error_message=error_msg,
             progress_message="Ingestion failed — see error_message",
         )
-        document_store.update_status(
+        await document_store.update_status(
             document_id,
             DocumentStatus.FAILED,
             error_message=error_msg,

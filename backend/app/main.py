@@ -22,6 +22,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger, set_request_id
 from app.db import chromadb_client, redis_client
+from app.db.sqlite_store import init_sqlite
 
 settings = get_settings()
 configure_logging(log_level=settings.LOG_LEVEL, json_logs=not settings.DEBUG)
@@ -45,6 +46,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize ChromaDB
     chromadb_client.init_chromadb()
+
+    # Initialize SQLite persistent store (Day 7)
+    await init_sqlite()
 
     # Initialize Redis (non-fatal in development — warns if unavailable)
     try:

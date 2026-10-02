@@ -832,3 +832,132 @@
 .cache-hit-badge:hover {
   background: linear-gradient(135deg, rgba(251, 191, 36, 0.32), rgba(245, 158, 11, 0.22));
 }
+
+/* ── TelemetryPanel (Day 7) ──────────────────────────────────────────────── */
+.telemetry-panel {
+  margin-top: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.telemetry-panel__toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.telemetry-panel__toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+}
+
+.telemetry-panel__total {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: #6366f1;
+  font-weight: 700;
+}
+
+.telemetry-panel__chevron {
+  font-size: 0.65rem;
+  color: #64748b;
+}
+
+.telemetry-panel__body {
+  padding: 0.75rem 1rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Sections */
+.tel-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.tel-section-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #475569;
+  margin: 0;
+}
+
+/* Latency bars */
+.tel-bar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 60px;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.tel-bar-label { font-size: 0.76rem; color: #cbd5e1; white-space: nowrap; }
+
+.tel-bar-track {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.tel-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+
+.tel-bar-value {
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Token stats row */
+.tel-stats-row {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.tel-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.tel-stat__val {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #e2e8f0;
+}
+
+.tel-stat--accent .tel-stat__val { color: #818cf8; }
+
+.tel-stat__label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+/* Cost */
+.tel-cost {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #10b981;
+}

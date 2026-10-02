@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
 from app.db.chromadb_client import get_chunk_by_id
-from app.db.in_memory_store import document_store, job_store
+from app.db.sqlite_store import document_store, job_store
 from app.schemas.chunk import ChunkResponse
 from app.schemas.document import (
     DocumentMetadata,
@@ -125,9 +125,9 @@ async def upload_document(
     log = log.bind(document_id=document_id)
 
     # ── 5. Idempotency check ──────────────────────────────────────────────────
-    existing_doc = document_store.get(document_id, user_id=user_id)
+    existing_doc = await document_store.get(document_id, user_id=user_id)
     if existing_doc is not None:
-        existing_job = job_store.get_by_document(document_id)
+        existing_job = await job_store.get_by_document(document_id)
         job_id = existing_job.job_id if existing_job else "unknown"
         log.info(
             "Duplicate upload detected — returning existing record",
@@ -167,7 +167,7 @@ async def upload_document(
         user_id=user_id,
         source=safe_filename,
     )
-    document_store.save(doc)
+    await document_store.save(doc)
 
     # ── 8. Create job record ──────────────────────────────────────────────────
     job_id = str(uuid.uuid4())
@@ -179,7 +179,7 @@ async def upload_document(
         created_at=now,
         updated_at=now,
     )
-    job_store.save(job)
+    await job_store.save(job)
 
     log.info("Job created", job_id=job_id, status="pending")
 
@@ -211,7 +211,7 @@ async def list_documents(
     user_id: str = Depends(get_current_user_id),
 ) -> DocumentListResponse:
     """Returns all documents owned by the authenticated user, newest first."""
-    docs = document_store.list_for_user(user_id)
+    docs = await document_store.list_for_user(user_id)
     return DocumentListResponse(documents=docs, total=len(docs))
 
 
@@ -227,7 +227,7 @@ async def get_document(
     user_id: str = Depends(get_current_user_id),
 ) -> DocumentMetadata:
     """Returns document metadata including current ingestion status."""
-    doc = document_store.get(document_id, user_id=user_id)
+    doc = await document_store.get(document_id, user_id=user_id)
     if doc is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -254,7 +254,7 @@ async def get_chunk(
 ) -> ChunkResponse:
     """Full ChromaDB implementation — Day 3."""
     # Verify the parent document exists and belongs to this user
-    doc = document_store.get(document_id, user_id=user_id)
+    doc = await document_store.get(document_id, user_id=user_id)
     if doc is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

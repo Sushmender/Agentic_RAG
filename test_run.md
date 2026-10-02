@@ -1,7 +1,7 @@
 # Test Run Guide — Multimodal RAG Platform (Days 0–5)
 
-> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · **Day 6 Redis Cache Pipeline**  
-> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B) · Redis / Upstash
+> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · Day 6 Redis Cache Pipeline · **Day 7 Telemetry + SQLite Persistence + Metrics Dashboard**  
+> **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B) · Redis / Upstash · SQLite (aiosqlite) · JSONL telemetry
 
 ---
 
@@ -1518,6 +1518,377 @@ INFO  Ingestion started          status=processing
 
 ---
 
+## Day 7 — Telemetry + SQLite Persistence + Metrics Dashboard
+
+> [!IMPORTANT]
+> **What Day 7 added:** All pipeline telemetry is now captured automatically and persisted.
+> The in-memory `DocumentStore` / `JobStore` are replaced by **SQLite** (`data/rag.db`) — job and document state now survive server restarts.
+> Every query and ingestion appends a `TelemetryRecord` to `data/telemetry.jsonl` covering 5 benchmark categories:
+> **Latency** (avg + p95, per-stage) · **Token usage** · **ADE credits** · **Embedding cost** · **LLM cost**.
+> A new `GET /metrics` endpoint (no auth) and a frontend **📊 Metrics** dashboard display live aggregated stats.
+
+---
+
+### How the Day 7 Telemetry Pipeline Works
+
+```
+POST /query  (or ingestion background task)
+        ↓
+[All pipeline stages run as normal]
+        ↓
+[Step 8]  Append TelemetryRecord  →  data/telemetry.jsonl  (async, fire-and-forget)
+          TelemetryRecord {
+            record_type: "query"  |  "ingestion"
+            latency: { total_ms, embedding_ms, retrieval_ms, reranking_ms, llm_ms, ade_ms }
+            token_usage: { input_tokens, output_tokens, total_tokens }
+            ade_credits: { per_ingestion }
+            embedding_cost: { model, provider, token_count, cost_usd }
+            llm_cost: { model, provider, input_tokens, output_tokens, cost_usd }
+          }
+        ↓
+GET /api/v1/metrics  →  Reads last 5000 records from telemetry.jsonl
+                         Computes: avg latency, p95 latency, cache hit rate,
+                                   total tokens, total cost, total ADE credits
+```
+
+### SQLite Persistence
+
+```
+data/rag.db
+│
+├── documents   ← DocumentMetadata (replaces in-memory DocumentStore)
+│   └── document_id, user_id, filename, status, chunk_count,
+│       parser_version, ade_credits_used, embedding_model, ...
+│
+└── jobs        ← Job records (replaces in-memory JobStore)
+    └── job_id, document_id, status, progress_message,
+        chunks_created, chunks_embedded, started_at, completed_at, ...
+```
+
+> [!NOTE]
+> Document and job records now persist across server restarts. On startup, `init_sqlite()` creates
+> tables and indexes automatically. The DB file lives at `data/rag.db` (gitignored).
+
+---
+
+### 7.1 Automated Tests
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+
+# Day 7 telemetry tests only (19 tests, all async, ~10s)
+.venv\Scripts\python.exe -m pytest tests/test_telemetry.py -v
+
+# Full suite Days 0–7 (120 pass, 1 pre-existing ADE fixture error)
+.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/test_ade.py -v
+```
+
+**Expected Day 7 test output:**
+```
+tests/test_telemetry.py::TestTelemetrySchema::test_query_record_has_all_5_categories          PASSED
+tests/test_telemetry.py::TestTelemetrySchema::test_ingestion_record_has_all_5_categories      PASSED
+tests/test_telemetry.py::TestTelemetrySchema::test_record_type_validation                     PASSED
+tests/test_telemetry.py::TestTelemetrySchema::test_query_record_serialization_roundtrip       PASSED
+tests/test_telemetry.py::TestTelemetryService::test_append_record_writes_jsonl                PASSED
+tests/test_telemetry.py::TestTelemetryService::test_append_multiple_records                   PASSED
+tests/test_telemetry.py::TestTelemetryService::test_load_records_empty_file                   PASSED
+tests/test_telemetry.py::TestTelemetryService::test_load_records_after_append                 PASSED
+tests/test_telemetry.py::TestTelemetryService::test_append_error_does_not_raise               PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_empty_telemetry_returns_zeros               PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_query_count_and_cache_hit_rate              PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_avg_latency_computed_correctly              PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_p95_latency                                 PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_ade_credits_summed_from_ingestion_records   PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_total_tokens_and_cost                       PASSED
+tests/test_telemetry.py::TestComputeMetrics::test_records_analyzed_field                      PASSED
+tests/test_telemetry.py::TestMetricsEndpoint::test_get_metrics_returns_200                    PASSED
+tests/test_telemetry.py::TestMetricsEndpoint::test_get_metrics_no_auth_required               PASSED
+tests/test_telemetry.py::TestMetricsEndpoint::test_get_metrics_with_real_data                 PASSED
+
+19 passed in ~10s
+```
+
+**Overall after Day 7:** `120 passed, 1 error` (the 1 error is `test_ade.py::test_parse_sample` — pre-existing fixture issue since Day 2, unrelated to Day 7).
+
+### 7.2 Clean Start — Fresh Data Directory
+
+Since SQLite replaces the in-memory store and everything starts fresh, clean the old data:
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+Remove-Item -Recurse -Force data\chroma, data\uploads, data\ade_outputs, data\telemetry.jsonl, data\rag.db -ErrorAction SilentlyContinue
+```
+
+**Expected server startup logs (Day 7):**
+```
+INFO  Starting Multimodal RAG API    version=0.1.0
+INFO  ChromaDB initialized           collection=ade_documents  existing_chunks=0
+INFO  SQLite store initialised       db_path=data/rag.db
+INFO  Redis connected successfully
+INFO  All services initialized. Ready to serve.
+```
+
+> [!NOTE]
+> `SQLite store initialised` is the new line added in Day 7. The `data/rag.db` file is created
+> automatically on first startup. Documents and jobs uploaded before this restart are gone
+> (fresh start), but after this the state is durable across restarts.
+
+### 7.3 Upload a Document — Verify SQLite Persistence
+
+1. Upload any PDF and wait for `completed` status
+2. Restart the backend server (Ctrl+C → restart)
+3. Navigate to **📁 Documents** — the document should still appear as `completed`
+
+**Before Day 7:** Document disappeared on restart (in-memory).
+**After Day 7:** Document persists in `data/rag.db` — survives server restarts.
+
+Verify the SQLite DB directly:
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+.venv\Scripts\python.exe -c "
+import asyncio, aiosqlite
+async def check():
+    async with aiosqlite.connect('data/rag.db') as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute('SELECT document_id, filename, status, chunk_count FROM documents')
+        rows = await cur.fetchall()
+        for r in rows: print(dict(r))
+asyncio.run(check())
+"
+```
+
+**Expected output:**
+```
+{'document_id': 'sha256abc...', 'filename': 'budget_report.pdf', 'status': 'completed', 'chunk_count': 4}
+```
+
+### 7.4 Run Queries — Verify Telemetry Records
+
+1. Ask a question (cache miss — full pipeline runs)
+2. Check that `data/telemetry.jsonl` was created:
+
+```powershell
+Get-Content "data\telemetry.jsonl" | ConvertFrom-Json | Select-Object record_type, @{n="total_ms";e={$_.latency.total_ms}}, @{n="provider";e={$_.llm_cost.provider}}
+```
+
+**Expected output:**
+```
+record_type  total_ms  provider
+-----------  --------  --------
+query        2850.2    groq
+```
+
+After uploading another document, an ingestion record is also appended:
+```
+record_type  total_ms  provider
+-----------  --------  --------
+query        2850.2    groq
+ingestion    5200.0
+```
+
+### 7.5 GET /metrics — API Response
+
+**No auth required.**
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/metrics" | ConvertTo-Json -Depth 5
+```
+
+**Expected 200 response:**
+```json
+{
+  "query_count": 3,
+  "ingestion_count": 1,
+  "cache_hit_count": 1,
+  "cache_hit_rate": 0.3333,
+  "avg_latency_ms": 2840.5,
+  "p95_latency_ms": 3012.1,
+  "latency_by_stage": {
+    "embedding_ms": 1198.0,
+    "retrieval_ms": 44.2,
+    "reranking_ms": 381.0,
+    "llm_ms": 1217.3,
+    "ade_ms": 4500.0
+  },
+  "total_tokens": 1680,
+  "total_cost_usd": 0.000900,
+  "total_embedding_cost_usd": 0.0,
+  "total_llm_cost_usd": 0.000900,
+  "total_ade_credits": 3.0,
+  "records_analyzed": 4,
+  "oldest_record_ts": "2026-10-02T06:50:00+00:00",
+  "newest_record_ts": "2026-10-02T07:12:43+00:00"
+}
+```
+
+**Key fields:**
+
+| Field | Description |
+|---|---|
+| `query_count` | Total queries run through the pipeline |
+| `cache_hit_rate` | Fraction of queries served from Redis cache |
+| `avg_latency_ms` | Mean end-to-end latency (query records only) |
+| `p95_latency_ms` | 95th-percentile latency |
+| `latency_by_stage` | Average per stage: embed, retrieve, rerank, LLM, ADE |
+| `total_tokens` | Input + output tokens summed across all queries |
+| `total_cost_usd` | Embedding + LLM costs (USD) |
+| `total_ade_credits` | Credits consumed by all ingestion jobs |
+| `records_analyzed` | Number of telemetry records read from `telemetry.jsonl` |
+
+### 7.6 Frontend — Metrics Dashboard
+
+1. Log in at **http://localhost:5173**
+2. Click **📊 Metrics** in the navbar
+
+**Expected dashboard sections:**
+
+**Overview:**
+```
+🔍 Total Queries     ⚡ Cache Hit Rate    📄 Records Analysed
+   3                    33.3%               4
+   1 ingestions          1 hits             Since 2026-10-02
+```
+
+**Latency:**
+```
+⏱ Avg End-to-End     📈 p95 Latency
+  2.84 s               3.01 s
+
+Avg per-stage breakdown (query records)
+  🔢 Embedding  ████████████░░░░  1198 ms
+  🔍 Retrieval  █░░░░░░░░░░░░░░░  44 ms
+  🏆 Reranking  ████░░░░░░░░░░░░  381 ms
+  🤖 LLM        ████████████████  1217 ms
+  📑 ADE        ░░░░░░░░░░░░░░░░  0 ms  (ingestion only)
+```
+
+**Cost & Usage:**
+```
+🪙 Total LLM Cost    🧮 Embedding Cost    💰 Total Cost    📝 Total Tokens
+  $0.000900            $0.000000           $0.000900        1,680
+```
+
+**ADE Credits:**
+```
+🏦 Total ADE Credits Used
+   3.00
+   Across 1 ingestion(s)
+```
+
+> [!TIP]
+> The dashboard **auto-refreshes every 30 seconds**. Click **↻ Refresh** to force an immediate update.
+> The last refresh time is shown in the top-right corner.
+
+### 7.7 Frontend — Performance Details Panel (QueryPage)
+
+After every query result, a new **⚙️ Performance Details** collapsible panel appears below the answer:
+
+1. Click **⚙️ Performance Details** to expand
+2. **Expected panel contents:**
+
+```
+⚙️ Performance Details                    2850 ms total  ▼
+┌───────────────────────────────────────────────────────────┐
+│ ⏱ Latency Breakdown                                       │
+│   🔢 Embedding  ████████████░  1198 ms                    │
+│   🔍 Retrieval  █░░░░░░░░░░░░  44 ms                      │
+│   🏆 Reranking  ████░░░░░░░░░  380 ms                     │
+│   🤖 LLM        ██████████████  1227 ms                   │
+│                                                           │
+│ 🔤 Token Usage                                            │
+│      512          48         560                          │
+│     Input       Output       Total                        │
+│                                                           │
+│ 💰 Estimated Cost                                         │
+│   $0.000300                                               │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 7.8 PowerShell Verification Commands
+
+```powershell
+# Get metrics (no auth required)
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/metrics" | Select-Object query_count, cache_hit_rate, avg_latency_ms, total_cost_usd, total_ade_credits
+
+# Tail telemetry.jsonl (last 3 records)
+$lines = Get-Content "data\telemetry.jsonl"
+$lines | Select-Object -Last 3 | ForEach-Object { $_ | ConvertFrom-Json | Select-Object record_type, @{n="total_ms";e={$_.latency.total_ms}} }
+
+# Verify SQLite has documents
+.venv\Scripts\python.exe -c "
+import asyncio, aiosqlite
+async def q():
+    async with aiosqlite.connect('data/rag.db') as db:
+        cur = await db.execute('SELECT COUNT(*) FROM documents')
+        print('Documents in SQLite:', (await cur.fetchone())[0])
+        cur2 = await db.execute('SELECT COUNT(*) FROM jobs')
+        print('Jobs in SQLite:', (await cur2.fetchone())[0])
+asyncio.run(q())
+"
+```
+
+**Expected outputs:**
+```
+# Metrics
+query_count  cache_hit_rate  avg_latency_ms  total_cost_usd  total_ade_credits
+-----------  --------------  --------------  --------------  -----------------
+3            0.3333          2840.5          0.000900        3.0
+
+# Telemetry tail
+record_type  total_ms
+-----------  --------
+query        2850.2
+query        31.0
+ingestion    5200.0
+
+# SQLite counts
+Documents in SQLite: 2
+Jobs in SQLite: 2
+```
+
+### 7.9 Log Reading Guide — Day 7 Telemetry
+
+**Telemetry append on query completion:**
+```
+INFO  Query pipeline complete
+      route=text  provider=groq  total_ms=2850.2  cost_usd=0.0003
+
+# (immediately after — fire-and-forget, non-blocking)
+DEBUG Telemetry record appended  record_type=query  record_id=uuid...
+```
+
+**Telemetry append on ingestion completion:**
+```
+INFO  Ingestion completed        status=completed  chunk_count=4
+DEBUG Telemetry record appended  record_type=ingestion  record_id=uuid...
+```
+
+**Telemetry write failure (non-fatal):**
+```
+WARNING Telemetry append failed (non-fatal)  error=disk full  record_id=uuid...
+# Pipeline continues normally — telemetry failure NEVER breaks the API
+```
+
+**SQLite init on startup:**
+```
+INFO  SQLite store initialised  db_path=data/rag.db
+```
+
+### 7.10 Error Cases
+
+| Test | Expected |
+|---|---|
+| `GET /metrics` with no auth | `200 OK` — no auth required |
+| `GET /metrics` with empty `telemetry.jsonl` | `200 OK` with all zeros |
+| `telemetry.jsonl` write fails (disk full) | Warning logged, pipeline returns `200 OK` normally |
+| Server restart after documents uploaded | Documents still visible — persisted in `data/rag.db` |
+| `data/rag.db` deleted manually | Tables recreated on next startup — documents/jobs lost (fresh start) |
+| Metrics with only ingestion records | `query_count=0`, `avg_latency_ms=0`, `total_ade_credits` populated |
+| Metrics with only query records | `ingestion_count=0`, `total_ade_credits=0`, latency computed from queries |
+
+---
+
 ## Pipeline Status — What Is Built vs What Remains
 
 | Day | Feature | Status |
@@ -1529,7 +1900,7 @@ INFO  Ingestion started          status=processing
 | 4 | Router + Retrieval: query router (text/multimodal/hybrid), Top-N candidates via ChromaDB | ✅ Built |
 | 5 | Rerank + LLM: OpenRouter reranker, context assembly, Qwen 3.8 27B + Nemotron fallback, grounded answer | ✅ **Built** |
 | 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion, `/query/history` endpoint, ⚡ cache-hit badge | ✅ **Built** |
-| 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint | Not built |
+| 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint, 📊 Metrics dashboard | ✅ **Built** |
 | 8 | Evaluation + Hardening: Recall@K / Precision@K, Docker Compose, rate limiting, full polish | Not built |
 
 ---
@@ -1572,4 +1943,15 @@ INFO  Ingestion started          status=processing
 | `QueryPage.jsx` (cache badge) | Day 6 | ⚡ Instant (cached) amber badge with pulse animation when `cache_hit=true` |
 | `QueryPage.css` (`.cache-hit-badge`) | Day 6 | Amber gradient badge, `cache-pulse` keyframe animation |
 | `tests/test_cache.py` | Day 6 | 17 mocked unit tests — key format, miss/hit, store, invalidation, list, graceful degradation |
+| `schemas/telemetry.py` | Day 7 | `TelemetryRecord` + `MetricsResponse` Pydantic models — all 5 benchmark categories |
+| `services/telemetry_service.py` | Day 7 | Async `append_record()` to `data/telemetry.jsonl`; `compute_metrics()` with avg/p95 aggregation |
+| `db/sqlite_store.py` | Day 7 | `DocumentSQLiteStore` + `JobSQLiteStore` (async aiosqlite) — replaces in-memory stores |
+| `GET /api/v1/metrics` | Day 7 | Aggregated observability metrics — no auth, reads last 5000 telemetry records |
+| `app/main.py` (lifespan) | Day 7 | `await init_sqlite()` on startup — creates `documents` + `jobs` tables in `data/rag.db` |
+| `POST /query` (Step 8) | Day 7 | `TelemetryRecord` appended after every successful query pipeline run |
+| `services/ingestion_service.py` (Step 11) | Day 7 | `TelemetryRecord` appended after every successful ingestion run |
+| `pages/MetricsPage.jsx` + `MetricsPage.css` | Day 7 | 📊 Metrics dashboard — glassmorphism cards, color-coded CSS latency bars, 30 s auto-refresh |
+| `QueryPage.jsx` (`TelemetryPanel`) | Day 7 | Collapsible ⚙️ Performance Details panel below each answer — latency bars, token counts, cost |
+| `Navbar.jsx` + `App.jsx` | Day 7 | 📊 Metrics nav link and `/metrics` route added |
+| `tests/test_telemetry.py` | Day 7 | 19 async tests — schema validation, append/load, aggregation (avg/p95/credits/cost), endpoint |
 

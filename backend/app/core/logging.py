@@ -193,7 +193,7 @@ def configure_logging(log_level: str = "INFO", json_logs: bool = True) -> None:
     root_logger.setLevel(log_level.upper())
 
     # Suppress noisy third-party loggers
-    for lib in ("uvicorn.access", "uvicorn.error", "chromadb", "httpx", "httpcore"):
+    for lib in ("uvicorn.access", "uvicorn.error", "chromadb", "httpx", "httpcore", "app.services.ingestion_service"):
         logging.getLogger(lib).setLevel(logging.WARNING)
 
 
