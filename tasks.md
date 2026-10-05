@@ -1,6 +1,6 @@
 # Implementation Tasks — Multimodal RAG Platform
 
-> Track: Day 0 (Foundation) + Day 1–8 (Full Pipeline Implementation)
+> Track: Day 0 (Foundation) + Day 1–9 (Full Pipeline Implementation)
 > Stack: FastAPI · React · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA models) · Groq · Redis
 
 ---
@@ -358,7 +358,7 @@
 
 ---
 
-## Day 8 — RAG Evaluation + Production Hardening
+## Day 8 — RAG Evaluation & Source Grounding
 
 ### Backend
 - [ ] Create `backend/evaluation/gold_dataset.py`:
@@ -376,6 +376,27 @@
 - [ ] Create `backend/app/api/v1/endpoints/evaluation.py` — `GET /evaluation/run`:
   - Trigger evaluation on gold dataset
   - Return: `{ pre_rerank: { recall_at_k, precision_at_k }, post_rerank: { recall_at_k, precision_at_k } }`
+- [ ] Create `backend/tests/test_evaluation.py` — verify Recall@K and Precision@K computed correctly
+
+### Frontend
+- [ ] Create `EvaluationPage.jsx`:
+  - Button to trigger `GET /evaluation/run`
+  - Display results table: question | pre-rerank Recall@K | pre-rerank Precision@K | post-rerank Recall@K | post-rerank Precision@K
+- [ ] Source grounding enhancement:
+  - If chunk has `bbox` and document page image available, highlight bbox region on page thumbnail
+  - Otherwise show page number + chunk type badge
+
+### Verification
+- [ ] `GET /evaluation/run` returns `{ pre_rerank, post_rerank }` with `recall_at_k` and `precision_at_k`
+- [ ] Post-rerank Recall@K ≥ pre-rerank Recall@K (reranking improves or maintains recall)
+- [ ] Frontend evaluation page shows metrics table
+- [ ] `pytest backend/tests/test_evaluation.py` passes
+
+---
+
+## Day 9 — Production Hardening & Final Polish
+
+### Backend
 - [ ] Production hardening:
   - [ ] Add global exception handler — catch unhandled exceptions, return `500` with `request_id`
   - [ ] Add rate limiting on `POST /query` — max 10 req/minute per IP using `slowapi`
@@ -391,15 +412,10 @@
   - `redis` service: `redis:7-alpine`
   - `chromadb` service: `chromadb/chroma` (or use local persistent volume)
   - Mount `data/` as volume
-- [ ] Create `backend/tests/test_evaluation.py` — verify Recall@K and Precision@K computed correctly
+- [ ] Full code Consistency check and cleanup
+- [ ] Create a Readme.md for complete project in the outer folder of this project
 
 ### Frontend
-- [ ] Create `EvaluationPage.jsx`:
-  - Button to trigger `GET /evaluation/run`
-  - Display results table: question | pre-rerank Recall@K | pre-rerank Precision@K | post-rerank Recall@K | post-rerank Precision@K
-- [ ] Source grounding enhancement:
-  - If chunk has `bbox` and document page image available, highlight bbox region on page thumbnail
-  - Otherwise show page number + chunk type badge
 - [ ] Full polish:
   - [ ] Responsive layout (mobile-friendly)
   - [ ] Error state components (network error, 4xx, 5xx messages)
@@ -409,16 +425,12 @@
   - [ ] Toast notifications for upload success/failure
 
 ### Verification
-- [ ] `GET /evaluation/run` returns `{ pre_rerank, post_rerank }` with `recall_at_k` and `precision_at_k`
-- [ ] Post-rerank Recall@K ≥ pre-rerank Recall@K (reranking improves or maintains recall)
 - [ ] Rate limiter blocks > 10 requests/minute from same IP on `/query`
 - [ ] Upload of file > `MAX_UPLOAD_SIZE_MB` returns `413`
 - [ ] Upload of unsupported MIME type returns `415`
 - [ ] Server returns `request_id` in all error responses
 - [ ] `docker-compose up` starts all services and health endpoint returns 200
-- [ ] Frontend evaluation page shows metrics table
 - [ ] `pytest backend/tests/ -v` — all tests pass
-- [ ] `pytest backend/tests/test_evaluation.py` passes
 
 ---
 
@@ -434,4 +446,5 @@
 | 5 | Rerank + LLM | OpenRouter reranker, context assembly, Qwen 27B + Nemotron fallback, grounded answer |
 | 6 | Redis Cache | Query-answer caching, cache invalidation on re-ingestion |
 | 7 | Observability | 5 benchmark categories, SQLite persistence, `/metrics` endpoint |
-| 8 | Evaluation + Hardening | Recall@K / Precision@K, Docker Compose, rate limiting, full polish |
+| 8 | RAG Evaluation & Source Grounding | Recall@K / Precision@K, Gold dataset, Evaluation endpoints, Source grounding |
+| 9 | Production Hardening & Polish | Docker Compose, rate limiting, full polish, code consistency check, project Readme |
