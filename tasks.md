@@ -361,36 +361,36 @@
 ## Day 8 — RAG Evaluation & Source Grounding
 
 ### Backend
-- [ ] Create `backend/evaluation/gold_dataset.py`:
+- [x] Create `backend/evaluation/gold_dataset.py`:
   - Gold dataset format: `[{ "question", "expected_document_ids": [], "expected_chunk_ids": [] }]`
   - Load from `data/gold_dataset.json` if exists
   - If no gold dataset: generate minimal one from first 5 ingested documents using rule-based extraction (no LLM)
   - Save to `data/gold_dataset.json`
-- [ ] Create `backend/evaluation/evaluator.py`:
+- [x] Create `backend/evaluation/evaluator.py`:
   - `recall_at_k(retrieved_ids, expected_ids, k)` — fraction of expected in Top-K
   - `precision_at_k(retrieved_ids, expected_ids, k)` — fraction of Top-K that are expected
   - `evaluate_pipeline(gold_dataset, k=5)` → for each question:
     - Run retrieval (pre-reranking) → compute Recall@K, Precision@K
     - Run reranking → compute Recall@K, Precision@K on reranked set
   - Return structured report: per-question and aggregate metrics
-- [ ] Create `backend/app/api/v1/endpoints/evaluation.py` — `GET /evaluation/run`:
+- [x] Create `backend/app/api/v1/endpoints/evaluation.py` — `GET /evaluation/run`:
   - Trigger evaluation on gold dataset
   - Return: `{ pre_rerank: { recall_at_k, precision_at_k }, post_rerank: { recall_at_k, precision_at_k } }`
-- [ ] Create `backend/tests/test_evaluation.py` — verify Recall@K and Precision@K computed correctly
+- [x] Create `backend/tests/test_evaluation.py` — verify Recall@K and Precision@K computed correctly
 
 ### Frontend
-- [ ] Create `EvaluationPage.jsx`:
+- [x] Create `EvaluationPage.jsx`:
   - Button to trigger `GET /evaluation/run`
   - Display results table: question | pre-rerank Recall@K | pre-rerank Precision@K | post-rerank Recall@K | post-rerank Precision@K
-- [ ] Source grounding enhancement:
+- [x] Source grounding enhancement:
   - If chunk has `bbox` and document page image available, highlight bbox region on page thumbnail
   - Otherwise show page number + chunk type badge
 
 ### Verification
-- [ ] `GET /evaluation/run` returns `{ pre_rerank, post_rerank }` with `recall_at_k` and `precision_at_k`
-- [ ] Post-rerank Recall@K ≥ pre-rerank Recall@K (reranking improves or maintains recall)
-- [ ] Frontend evaluation page shows metrics table
-- [ ] `pytest backend/tests/test_evaluation.py` passes
+- [x] `GET /evaluation/run` returns `{ pre_rerank, post_rerank }` with `recall_at_k` and `precision_at_k`
+- [x] Post-rerank Recall@K ≥ pre-rerank Recall@K (reranking improves or maintains recall)
+- [x] Frontend evaluation page shows metrics table
+- [x] `pytest backend/tests/test_evaluation.py` passes
 
 ---
 

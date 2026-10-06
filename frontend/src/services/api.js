@@ -91,4 +91,10 @@ export const healthAPI = {
   check: () => api.get('/health'),
 };
 
+// ── Evaluation endpoint (Day 8) ────────────────────────────────────────────────
+
+export const evaluationAPI = {
+  run: (k = 5) => api.get(`/evaluation/run?k=${k}`),
+};
+
 export default api;

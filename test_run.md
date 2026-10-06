@@ -1,6 +1,6 @@
-# Test Run Guide — Multimodal RAG Platform (Days 0–5)
+# Test Run Guide — Multimodal RAG Platform (Days 0–8)
 
-> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · Day 6 Redis Cache Pipeline · **Day 7 Telemetry + SQLite Persistence + Metrics Dashboard**  
+> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · Day 6 Redis Cache Pipeline · Day 7 Telemetry + SQLite Persistence + Metrics Dashboard · **Day 8 RAG Evaluation + Source Grounding**  
 > **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B) · Redis / Upstash · SQLite (aiosqlite) · JSONL telemetry
 
 ---
@@ -1889,6 +1889,363 @@ INFO  SQLite store initialised  db_path=data/rag.db
 
 ---
 
+## Day 8 — RAG Evaluation & Source Grounding
+
+> [!IMPORTANT]
+> **What Day 8 added:** The platform now features a quantitative retrieval evaluation framework and visual citation grounding.
+> - **Gold Dataset (`data/gold_dataset.json`):** Ground-truth evaluation dataset mapping benchmark questions to expected document IDs and chunk IDs. Supports automatic, rule-based generation from ingested chunks if a dataset doesn't already exist.
+> - **Retrieval Metrics (Recall@K & Precision@K):** Evaluates retrieval effectiveness both **pre-rerank** (raw ChromaDB Top-N) and **post-rerank** (NVIDIA Nemotron reranked Top-K), measuring reranking lift.
+> - **Evaluation Endpoint (`GET /api/v1/evaluation/run`):** Open endpoint (no auth required) that runs the evaluation pipeline against the gold dataset and produces aggregate summary metrics and per-question breakdowns.
+> - **Evaluation Dashboard (`EvaluationPage.jsx`):** Interactive frontend dashboard with a K-selector (1–10), "Run Evaluation" trigger, aggregate metric cards with improvement badges (▲/▼), and a detailed per-question comparison table.
+> - **Visual Source Grounding (`QueryPage.jsx`):** Source citation cards now display an SVG page thumbnail preview showing the normalized ADE bounding box (`[x0, y0, x1, y1]`) highlighted in real time, color-coded according to chunk type (`text`, `table`, or `figure`).
+
+---
+
+### How the Evaluation Pipeline Works
+
+```
+Gold Dataset (data/gold_dataset.json)
+[ { "question": "...", "expected_document_ids": [...], "expected_chunk_ids": [...] } ]
+                          ↓
+      For each question in gold dataset:
+                          ↓
+       1. [Query Router] → Route (text / multimodal / hybrid)
+                          ↓
+       2. [Query Embed]  → NVIDIA Nemotron Embed (query mode)
+                          ↓
+       3. [ChromaDB]     → Retrieve Top-N candidate chunks (default N=20)
+                          ↓
+       4. [Pre-Rerank Evaluation]
+          Compute Recall@K and Precision@K on top-K raw candidates
+                          ↓
+       5. [Reranker]     → NVIDIA Nemotron Rerank (score candidates)
+                          ↓
+       6. [Post-Rerank Evaluation]
+          Compute Recall@K and Precision@K on top-K reranked candidates
+                          ↓
+       7. Aggregate across all questions:
+          Mean Recall@K (pre & post) · Mean Precision@K (pre & post) · Deltas
+```
+
+---
+
+### Metrics Explained: Recall@K vs Precision@K
+
+| Metric | Formula | What It Measures | Target |
+|---|---|---|---|
+| **Recall@K** | $\frac{\lvert \text{Top-K Retrieved} \cap \text{Expected} \rvert}{\lvert \text{Expected} \rvert}$ | Did the retrieval pipeline find all required ground-truth evidence within the top-$K$ results? | High (ideally 1.0 / 100%) |
+| **Precision@K** | $\frac{\lvert \text{Top-K Retrieved} \cap \text{Expected} \rvert}{K}$ | What fraction of the top-$K$ returned chunks are actually relevant? (Penalizes irrelevant distractors) | Balanced with context budget |
+| **Post-Rerank Delta** | $\text{Post-Rerank Recall@K} - \text{Pre-Rerank Recall@K}$ | Did the NVIDIA reranker push relevant chunks up into the top-$K$ cut-off? | $\ge 0$ (Reranker improves or preserves ranking) |
+
+---
+
+### Gold Dataset Schema & Generation
+
+```json
+[
+  {
+    "question": "What is the budget breakdown in the report?",
+    "expected_document_ids": ["9f2c8d7e..."],
+    "expected_chunk_ids": ["a1b2c3d4..."]
+  }
+]
+```
+
+> [!NOTE]
+> If `data/gold_dataset.json` does not exist, `load_or_generate()` automatically inspects the first 5 ingested documents in `data/ade_outputs/` and extracts table titles, figure captions, or high-density text sentences to construct realistic questions with known ground-truth `chunk_id`s, saving the file for future reproducible test runs.
+
+---
+
+### Visual Source Grounding (BBox Coordinates & Page SVG)
+
+LandingAI ADE outputs normalized bounding boxes `[x0, y0, x1, y1]` where coordinates range between 0.0 and 1.0 relative to page dimensions:
+- $x_0$: Left edge fraction
+- $y_0$: Top edge fraction
+- $x_1$: Right edge fraction
+- $y_1$: Bottom edge fraction
+
+In `QueryPage.jsx`, each expanded source card renders an SVG miniature page (100×141 aspect ratio) showing:
+- Dark page background (`#1e293b`) with subtle simulated text layout lines
+- Bounding box rectangle with SVG coordinates: $X = x_0 \times 100$, $Y = y_0 \times 141$, $W = (x_1 - x_0) \times 100$, $H = (y_1 - y_0) \times 141$
+- Distinct color-coding: **Indigo/Blue** for `text`, **Emerald/Green** for `table`, **Amber** for `figure`
+- Visual corner anchor handles and exact coordinate string `[x0, y0, x1, y1]`
+
+---
+
+### 8.1 Automated Tests
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+
+# Run Day 8 evaluation tests only (26 tests, all unit/mocked, ~3s)
+.venv\Scripts\python.exe -m pytest tests/test_evaluation.py -v
+
+# Full test suite Days 0–8 (143 passed, 1 pre-existing failure)
+.venv\Scripts\python.exe -m pytest tests/ --ignore=tests/test_ade.py -v
+```
+
+**Expected Day 8 test output:**
+```
+tests/test_evaluation.py::TestRecallAtK::test_perfect_recall PASSED      [  3%]
+tests/test_evaluation.py::TestRecallAtK::test_partial_recall PASSED      [  7%]
+tests/test_evaluation.py::TestRecallAtK::test_zero_recall PASSED         [ 11%]
+tests/test_evaluation.py::TestRecallAtK::test_empty_expected_returns_zero PASSED [ 15%]
+tests/test_evaluation.py::TestRecallAtK::test_k_smaller_than_retrieved PASSED [ 19%]
+tests/test_evaluation.py::TestRecallAtK::test_k_equals_one PASSED        [ 23%]
+tests/test_evaluation.py::TestRecallAtK::test_k_equals_one_miss PASSED   [ 26%]
+tests/test_evaluation.py::TestPrecisionAtK::test_perfect_precision PASSED [ 30%]
+tests/test_evaluation.py::TestPrecisionAtK::test_partial_precision PASSED [ 34%]
+tests/test_evaluation.py::TestPrecisionAtK::test_zero_precision PASSED   [ 38%]
+tests/test_evaluation.py::TestPrecisionAtK::test_k_zero_returns_zero PASSED [ 42%]
+tests/test_evaluation.py::TestPrecisionAtK::test_k_equals_one_hit PASSED [ 46%]
+tests/test_evaluation.py::TestPrecisionAtK::test_k_equals_one_miss PASSED [ 50%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_extract_topic_from_plain_text PASSED [ 53%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_extract_topic_strips_html PASSED [ 57%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_extract_table_title PASSED [ 61%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_question_from_text_chunk PASSED [ 65%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_question_from_table_chunk PASSED [ 69%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_question_from_figure_chunk PASSED [ 73%]
+tests/test_evaluation.py::TestGoldDatasetHelpers::test_question_from_empty_chunk_returns_none PASSED [ 76%]
+tests/test_evaluation.py::TestGoldDatasetIO::test_save_and_load PASSED   [ 80%]
+tests/test_evaluation.py::TestGoldDatasetIO::test_load_returns_none_if_no_file PASSED [ 84%]
+tests/test_evaluation.py::TestEvaluatePipeline::test_evaluate_pipeline_structure PASSED [ 88%]
+tests/test_evaluation.py::TestEvaluatePipeline::test_evaluate_pipeline_perfect_hit PASSED [ 92%]
+tests/test_evaluation.py::TestEvaluatePipeline::test_evaluate_pipeline_miss PASSED [ 96%]
+tests/test_evaluation.py::TestEvaluatePipeline::test_evaluate_pipeline_empty_gold PASSED [100%]
+
+26 passed in ~3s
+```
+
+**Overall after Day 8:** `143 passed, 1 pre-existing error` (`test_get_document_returns_metadata`).
+
+---
+
+### 8.2 Inspect / Generate Gold Dataset
+
+Verify the presence and format of `data/gold_dataset.json`:
+
+```powershell
+Get-Content "data\gold_dataset.json" | ConvertFrom-Json | Select-Object -First 2 | ConvertTo-Json -Depth 4
+```
+
+**Expected output:**
+```json
+[
+  {
+    "question": "What is the budget breakdown in the report?",
+    "expected_document_ids": [
+      "9f2c8d7e..."
+    ],
+    "expected_chunk_ids": [
+      "a1b2c3d4..."
+    ]
+  },
+  {
+    "question": "What are the quarterly expenditure totals?",
+    "expected_document_ids": [
+      "9f2c8d7e..."
+    ],
+    "expected_chunk_ids": [
+      "e5f6a7b8..."
+    ]
+  }
+]
+```
+
+---
+
+### 8.3 Run Evaluation via API (`GET /api/v1/evaluation/run`)
+
+**No authentication required** (observability/evaluation tooling).
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/evaluation/run?k=5" | ConvertTo-Json -Depth 5
+```
+
+**Expected 200 response:**
+```json
+{
+  "k": 5,
+  "questions_evaluated": 2,
+  "pre_rerank": {
+    "recall_at_k": 1.0,
+    "precision_at_k": 0.2
+  },
+  "post_rerank": {
+    "recall_at_k": 1.0,
+    "precision_at_k": 0.2
+  },
+  "per_question": [
+    {
+      "question": "What is the budget breakdown in the report?",
+      "expected_chunk_ids": ["a1b2c3d4..."],
+      "pre_rerank": {
+        "retrieved_chunk_ids": ["a1b2c3d4...", "b2c3d4e5...", "c3d4e5f6..."],
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2
+      },
+      "post_rerank": {
+        "retrieved_chunk_ids": ["a1b2c3d4...", "c3d4e5f6...", "b2c3d4e5..."],
+        "recall_at_k": 1.0,
+        "precision_at_k": 0.2
+      }
+    }
+  ]
+}
+```
+
+**Key metric observations:**
+- `pre_rerank.recall_at_k`: Fraction of expected chunks found in top-$K$ raw retrieval.
+- `post_rerank.recall_at_k`: Fraction of expected chunks retained in top-$K$ after reranking.
+- When $K=5$ and 1 ground truth chunk is expected, perfect recall yields $\text{Precision@5} = \frac{1}{5} = 0.20$ (20%).
+
+---
+
+### 8.4 Frontend — Evaluation Dashboard (`EvaluationPage`)
+
+1. Start backend and frontend
+2. Navigate to **http://localhost:5173** and log in
+3. Click **🎯 Evaluation** in the top navigation bar
+4. Select the evaluation cutoff $K$ (e.g. `K = 5`)
+5. Click **▶ Run Evaluation**
+
+**Expected Dashboard Display:**
+
+```
+🎯 RAG Evaluation
+Measure Recall@K and Precision@K before and after reranking on the gold dataset
+
+Evaluate at K = [ 5 ▼ ] (top-5 candidates considered)       [ ▶ Run Evaluation ]
+
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ Questions Evaluated │ │ Pre-Rerank Recall@5 │ │ Post-Rerank Recall@5│ │Post-Rerank Prec@5   │
+│         2           │ │        100.0%       │ │   100.0%  ▲ +0.0%   │ │    20.0%            │
+│      at K = 5       │ │   Before reranking  │ │   After reranking   │ │   After reranking   │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
+
+📋 Per-Question Breakdown (2 questions)
+┌───┬──────────────────────────────────────┬──────────────┬─────────────┬───────────────┬──────────────┐
+│ # │ Question                             │ Pre Recall@5 │ Pre Prec@5  │ Post Recall@5 │ Post Prec@5  │
+├───┼──────────────────────────────────────┼──────────────┼─────────────┼───────────────┼──────────────┤
+│ 1 │ What is the budget breakdown in...   │    100.0%    │    20.0%    │    100.0%     │    20.0%     │
+│ 2 │ What are the quarterly expenditure.. │    100.0%    │    20.0%    │    100.0%     │    20.0%     │
+└───┴──────────────────────────────────────┴──────────────┴─────────────┴───────────────┴──────────────┘
+```
+
+> [!TIP]
+> When post-rerank metrics improve over pre-rerank, a green indicator badge `▲` highlights the lift. If metrics stay identical, a neutral `— same` pill is displayed.
+
+---
+
+### 8.5 Frontend — Source Grounding with Visual Bounding Box (`QueryPage`)
+
+1. Navigate to **💬 Ask a Question**
+2. Ask any question about an uploaded document (e.g. `What is the budget report about?`)
+3. Below the answer, expand any citation card under **📎 Sources**
+
+**Expected Visual Citation Display:**
+
+```
+#1  📁 2_table_budget_report.pdf  📊 Table   Page 1   96.7%  ▲
+┌────────────────────────────────────────────────────────────────────────┐
+│ 📍 Source location on page 1                                           │
+│ ┌───────────────────────────┐                                          │
+│ │ ───────────────────────── │                                          │
+│ │ ┌───────────────────────┐ │  ← Green emerald highlight for Table     │
+│ │ │ ■                   ■ │ │  ← Corner positioning handles            │
+│ │ │                       │ │                                          │
+│ │ │ ■                   ■ │ │                                          │
+│ │ └───────────────────────┘ │                                          │
+│ │ ───────────────────────── │                                          │
+│ └───────────────────────────┘                                          │
+│ [0.120, 0.070, 0.860, 0.320]                                           │
+│                                                                        │
+│ | Department | Q1 ($) | Q2 ($) | Total ($) |                           │
+│ | Finance    | 12,000 | 14,500 | 26,500    |                           │
+│                                                                        │
+│ Chunk ID  sha256abc123...    Doc ID  sha256def456...   BBox [0.120...] │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Type-based color accents:**
+  - 📄 `text` → Indigo stroke and soft background (`#6366f1`)
+  - 📊 `table` → Emerald green stroke and soft background (`#10b981`)
+  - 🖼️ `figure` → Amber stroke and soft background (`#f59e0b`)
+- Visual mini-page SVG clearly communicates the physical location of the extracted chunk on the original document page.
+
+---
+
+### 8.6 PowerShell Verification Commands
+
+```powershell
+# 1. Check ChromaDB chunk count (ensure at least 1 document indexed)
+.venv\Scripts\python.exe -c "
+from app.db.chromadb_client import get_collection_stats
+print('ChromaDB Stats:', get_collection_stats())
+"
+
+# 2. Inspect the gold dataset question list
+Get-Content "data\gold_dataset.json" | ConvertFrom-Json | Select-Object question, @{n="chunks";e={$_.expected_chunk_ids.Count}}
+
+# 3. Trigger evaluation via API at K=3
+$evalResult = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/evaluation/run?k=3"
+$evalResult | Select-Object k, questions_evaluated, @{n="pre_recall";e={$_.pre_rerank.recall_at_k}}, @{n="post_recall";e={$_.post_rerank.recall_at_k}}
+
+# 4. Trigger evaluation via API at K=5
+$eval5 = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/evaluation/run?k=5"
+$eval5 | Select-Object k, questions_evaluated, @{n="pre_recall";e={$_.pre_rerank.recall_at_k}}, @{n="post_recall";e={$_.post_rerank.recall_at_k}}
+```
+
+**Expected output:**
+```
+ChromaDB Stats: {'total_chunks': 3, 'document_breakdown': {'...': 3}}
+
+question                                        chunks
+--------                                        ------
+What is the budget breakdown in the report?          1
+What are the quarterly expenditure totals?           1
+
+k questions_evaluated pre_recall post_recall
+- ------------------- ---------- -----------
+3                   2        1.0         1.0
+
+k questions_evaluated pre_recall post_recall
+- ------------------- ---------- -----------
+5                   2        1.0         1.0
+```
+
+---
+
+### 8.7 Log Reading Guide — Day 8 Evaluation Run
+
+Structured logs emitted during an evaluation execution:
+
+```
+INFO  Starting evaluation       k=5  gold_questions=2
+INFO  Query routed              route=multimodal  keyword_hits=['table']  word_count=8
+DEBUG Calling OpenRouter embeddings API  input_type=query
+INFO  Retrieval complete        strategy=multimodal  results_count=20
+INFO  Calling OpenRouter reranker  candidates_count=20  top_k=5
+INFO  Reranking complete        latency_ms=382.4  returned=5
+INFO  Evaluation complete       k=5  questions=2  pre_recall=1.0  post_recall=1.0
+INFO  HTTP request              method=GET  path=/api/v1/evaluation/run?k=5  status_code=200
+```
+
+---
+
+### 8.8 Error Cases
+
+| Test | Expected |
+|---|---|
+| `GET /evaluation/run` with no documents in ChromaDB | `400 Bad Request` with `{"error": "No documents indexed — cannot evaluate"}` |
+| `GET /evaluation/run?k=0` or `k=-5` | Clamped to `k=1`, evaluation runs with $K=1$ |
+| `GET /evaluation/run?k=100` | Clamped to `k=20` (maximum candidate pool) |
+| Missing `data/gold_dataset.json` with indexed documents | Automatically generates gold dataset from ingested chunks and executes evaluation |
+| Empty `data/gold_dataset.json` file | Re-generates or returns `400 Bad Request` |
+| Reranker failure during evaluation | Gracefully falls back to raw retrieval ranking for that question, logged with warning |
+
+---
+
 ## Pipeline Status — What Is Built vs What Remains
 
 | Day | Feature | Status |
@@ -1901,7 +2258,8 @@ INFO  SQLite store initialised  db_path=data/rag.db
 | 5 | Rerank + LLM: OpenRouter reranker, context assembly, Qwen 3.8 27B + Nemotron fallback, grounded answer | ✅ **Built** |
 | 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion, `/query/history` endpoint, ⚡ cache-hit badge | ✅ **Built** |
 | 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint, 📊 Metrics dashboard | ✅ **Built** |
-| 8 | Evaluation + Hardening: Recall@K / Precision@K, Docker Compose, rate limiting, full polish | Not built |
+| 8 | Evaluation + Source Grounding: Recall@K / Precision@K, Gold dataset, /evaluation/run endpoint, Evaluation Dashboard, BBox Visual Grounding | ✅ **Built** |
+| 9 | Production Hardening: Docker Compose, rate limiting, full polish, code consistency check, project Readme | Not built |
 
 ---
 
@@ -1954,4 +2312,13 @@ INFO  SQLite store initialised  db_path=data/rag.db
 | `QueryPage.jsx` (`TelemetryPanel`) | Day 7 | Collapsible ⚙️ Performance Details panel below each answer — latency bars, token counts, cost |
 | `Navbar.jsx` + `App.jsx` | Day 7 | 📊 Metrics nav link and `/metrics` route added |
 | `tests/test_telemetry.py` | Day 7 | 19 async tests — schema validation, append/load, aggregation (avg/p95/credits/cost), endpoint |
+| `app/evaluation/gold_dataset.py` | Day 8 | Gold dataset schema, loader from `data/gold_dataset.json`, rule-based auto-generation from chunks |
+| `app/evaluation/evaluator.py` | Day 8 | Metric calculation (`recall_at_k`, `precision_at_k`), full pipeline evaluator (pre & post rerank) |
+| `app/api/v1/endpoints/evaluation.py` | Day 8 | `GET /evaluation/run` endpoint, k validation, ChromaDB check, aggregate & per-question reporting |
+| `data/gold_dataset.json` | Day 8 | Curated gold question dataset with expected document & chunk IDs for grounded evaluation |
+| `pages/EvaluationPage.jsx` + `EvaluationPage.css` | Day 8 | 🎯 Evaluation dashboard — K-selector, metric cards with improvement badges, per-question comparison table |
+| `QueryPage.jsx` (`BBoxGrounding`) | Day 8 | Visual page thumbnail SVG with coordinate-mapped bounding box highlight per chunk type |
+| `Navbar.jsx` + `App.jsx` | Day 8 | 🎯 Evaluation nav link and `/evaluation` route added |
+| `tests/test_evaluation.py` | Day 8 | 26 unit tests — Recall@K, Precision@K, gold dataset helpers, file IO, pipeline evaluation |
+
 

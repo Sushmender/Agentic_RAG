@@ -12,6 +12,7 @@ import QueryPage from './pages/QueryPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import MetricsPage from './pages/MetricsPage';
+import EvaluationPage from './pages/EvaluationPage';
 
 // Protected route wrapper
 function PrivateRoute({ children }) {
@@ -39,6 +40,10 @@ function AppRoutes() {
         <Route
           path="/metrics"
           element={<PrivateRoute><MetricsPage /></PrivateRoute>}
+        />
+        <Route
+          path="/evaluation"
+          element={<PrivateRoute><EvaluationPage /></PrivateRoute>}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

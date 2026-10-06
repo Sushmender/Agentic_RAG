@@ -961,3 +961,51 @@
   font-weight: 700;
   color: #10b981;
 }
+
+/* ── BBox Grounding Visual (Day 8) ─────────────────────────────────────── */
+.bbox-grounding {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  margin-bottom: 1rem;
+}
+
+.bbox-grounding__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bbox-page-thumb {
+  width: 120px;
+  cursor: default;
+  transition: transform 0.15s;
+}
+
+.bbox-page-thumb:hover {
+  transform: scale(1.04);
+}
+
+.bbox-page-svg {
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: block;
+}
+
+.bbox-coords {
+  font-size: 0.72rem;
+  font-family: 'Fira Code', 'JetBrains Mono', monospace;
+  color: #475569;
+  letter-spacing: 0.01em;
+}
+

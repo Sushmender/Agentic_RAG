@@ -37,6 +37,12 @@ export default function Navbar() {
         >
           📊 Metrics
         </Link>
+        <Link
+          to="/evaluation"
+          className={`navbar-link ${location.pathname === '/evaluation' ? 'active' : ''}`}
+        >
+          🎯 Evaluation
+        </Link>
       </div>
 
       <div className="navbar-user">

@@ -371,6 +371,62 @@ function AnswerBox({ answer, hasModel }) {
   );
 }
 
+function BBoxGrounding({ bbox, page, chunkType }) {
+  if (!bbox || bbox.length !== 4) return null;
+
+  const [x0, y0, x1, y1] = bbox;
+  const width  = Math.max(x1 - x0, 0.02);
+  const height = Math.max(y1 - y0, 0.02);
+
+  // Color by chunk type
+  const colors = {
+    text:   { fill: 'rgba(99,102,241,0.25)', stroke: '#6366f1' },
+    table:  { fill: 'rgba(16,185,129,0.22)', stroke: '#10b981' },
+    figure: { fill: 'rgba(245,158,11,0.22)', stroke: '#f59e0b' },
+  };
+  const { fill, stroke } = colors[chunkType] || colors.text;
+
+  return (
+    <div className="bbox-grounding">
+      <div className="bbox-grounding__label">📍 Source location on page {page + 1}</div>
+      <div className="bbox-page-thumb" title={`BBox: [${bbox.map(v => v.toFixed(3)).join(', ')}]`}>
+        {/* Page background */}
+        <svg
+          viewBox="0 0 100 141"
+          xmlns="http://www.w3.org/2000/svg"
+          className="bbox-page-svg"
+        >
+          {/* Page background */}
+          <rect x="0" y="0" width="100" height="141" fill="#1e293b" rx="2" />
+          {/* Subtle page lines */}
+          {[18, 26, 34, 42, 50, 58, 66, 74, 82, 90, 98, 106, 114, 122].map((y) => (
+            <line key={y} x1="8" y1={y} x2="92" y2={y} stroke="#334155" strokeWidth="0.8" />
+          ))}
+          {/* Highlighted bbox region */}
+          <rect
+            x={x0 * 100}
+            y={y0 * 141}
+            width={width * 100}
+            height={height * 141}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth="1.5"
+            rx="1"
+          />
+          {/* Corner markers */}
+          <rect x={x0 * 100 - 1} y={y0 * 141 - 1} width="3" height="3" fill={stroke} rx="0.5" />
+          <rect x={(x0 + width) * 100 - 2} y={y0 * 141 - 1} width="3" height="3" fill={stroke} rx="0.5" />
+          <rect x={x0 * 100 - 1} y={(y0 + height) * 141 - 2} width="3" height="3" fill={stroke} rx="0.5" />
+          <rect x={(x0 + width) * 100 - 2} y={(y0 + height) * 141 - 2} width="3" height="3" fill={stroke} rx="0.5" />
+        </svg>
+      </div>
+      <div className="bbox-coords">
+        [{bbox.map(v => v.toFixed(3)).join(', ')}]
+      </div>
+    </div>
+  );
+}
+
 function SourceCard({ source, rank }) {
   const [expanded, setExpanded] = useState(false);
   const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
@@ -399,6 +455,13 @@ function SourceCard({ source, rank }) {
 
       {expanded && (
         <div className="source-card-body">
+          {/* Bbox grounding visual — Day 8 */}
+          <BBoxGrounding
+            bbox={source.bbox}
+            page={source.page}
+            chunkType={source.chunk_type}
+          />
+
           <div className="source-preview markdown-body">
             {source.text_preview ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -420,7 +483,7 @@ function SourceCard({ source, rank }) {
             {source.bbox?.length === 4 && (
               <span className="source-meta-item">
                 <strong>BBox</strong>
-                <code>[{source.bbox.map(v => v.toFixed(2)).join(', ')}]</code>
+                <code>[{source.bbox.map(v => v.toFixed(3)).join(', ')}]</code>
               </span>
             )}
           </div>
