@@ -1,28 +1,41 @@
 """
 backend/app/api/v1/endpoints/documents.py
-Document upload and retrieval endpoints — full Day 1 implementation.
+Document upload and retrieval endpoints.
 
-POST /documents/upload   — multipart upload, MIME validation, SHA-256 idempotency,
-                           file storage, async ingestion via BackgroundTasks
+POST /documents/upload   — multipart upload, magic-byte MIME validation,
+                           SHA-256 idempotency, file storage, async ingestion
 GET  /documents/         — list all documents for authenticated user
 GET  /documents/{id}     — single document metadata
-GET  /documents/{id}/chunks/{chunk_id} — Day 3 (stub still)
+GET  /documents/{id}/chunks/{chunk_id} — fetch chunk from ChromaDB
 """
 from __future__ import annotations
 
 import hashlib
+import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
 
 import aiofiles
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status, Response
+
+try:
+    import magic as _magic  # type: ignore
+    # Test-call to catch Windows DLL load failures (OSError) at startup,
+    # not silently at request time. python-magic-bin can fail with OSError
+    # if libmagic.dll is missing even when the import itself succeeds.
+    _magic.from_buffer(b"\x25\x50\x44\x46", mime=True)  # "%PDF" magic bytes
+    _MAGIC_AVAILABLE = True
+except Exception:
+    _magic = None  # type: ignore
+    _MAGIC_AVAILABLE = False
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
-from app.db.chromadb_client import get_chunk_by_id
+from app.db.chromadb_client import get_chunk_by_id, delete_document
 from app.db.sqlite_store import document_store, job_store
+from app.services.cache_service import invalidate_document_cache
 from app.schemas.chunk import ChunkResponse
 from app.schemas.document import (
     DocumentMetadata,
@@ -108,9 +121,16 @@ async def upload_document(
             detail="Uploaded file is empty.",
         )
 
-    # ── 3. Validate MIME type ─────────────────────────────────────────────────
-    # Use the content_type reported by the client (Day 8 adds magic-byte validation)
-    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
+    # ── 3. Validate MIME type using magic bytes (with client content_type fallback) ──
+    if _MAGIC_AVAILABLE:
+        detected_mime = _magic.from_buffer(file_bytes[:4096], mime=True)
+        content_type = detected_mime.split(";")[0].strip().lower()
+        log.debug("MIME detected via magic bytes", detected_mime=content_type)
+    else:
+        # Fallback: use browser-reported content type (less secure)
+        content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
+        log.warning("python-magic unavailable — using client-reported MIME type", content_type=content_type)
+
     if content_type not in [m.lower() for m in settings.ALLOWED_MIME_TYPES]:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -122,9 +142,10 @@ async def upload_document(
 
     # ── 4. Compute stable document_id = SHA-256(file_bytes) ──────────────────
     document_id = hashlib.sha256(file_bytes).hexdigest()
-    log = log.bind(document_id=document_id)
+    safe_filename = Path(file.filename or "upload").name  # strip path traversal
+    log = log.bind(document_id=document_id, filename=safe_filename)
 
-    # ── 5. Idempotency check ──────────────────────────────────────────────────
+    # ── 5. Idempotency check (exact content duplicate) ───────────────────────
     existing_doc = await document_store.get(document_id, user_id=user_id)
     if existing_doc is not None:
         existing_job = await job_store.get_by_document(document_id)
@@ -140,10 +161,47 @@ async def upload_document(
             message="Document already exists. Returning existing record.",
         )
 
+    # ── 5b. Overwrite / Replace previous document with same filename ─────────
+    # When a modified version of an existing file is uploaded, remove the old
+    # document's ChromaDB embeddings, cache entries, and database records.
+    old_docs = await document_store.get_by_filename(safe_filename, user_id=user_id)
+    for old_doc in old_docs:
+        if old_doc.document_id != document_id:
+            log.info(
+                "Replacing existing document with same filename",
+                old_document_id=old_doc.document_id,
+                filename=safe_filename,
+            )
+            # Remove old chunks from ChromaDB
+            try:
+                delete_document(old_doc.document_id)
+            except Exception as e:
+                log.warning("Failed to delete old ChromaDB chunks during overwrite", error=str(e))
+
+            # Invalidate Redis cache
+            try:
+                await invalidate_document_cache(old_doc.document_id)
+            except Exception as e:
+                log.warning("Failed to invalidate cache during overwrite", error=str(e))
+
+            # Remove old record from SQLite
+            await document_store.delete(old_doc.document_id, user_id=user_id)
+            await job_store.delete_by_document(old_doc.document_id)
+
+            # Clean up old upload disk folder
+            try:
+                old_upload_dir = settings.get_upload_dir() / old_doc.document_id
+                if old_upload_dir.exists():
+                    shutil.rmtree(old_upload_dir, ignore_errors=True)
+                old_ade_dir = Path(settings.ADE_OUTPUT_DIR) / old_doc.document_id
+                if old_ade_dir.exists():
+                    shutil.rmtree(old_ade_dir, ignore_errors=True)
+            except Exception:
+                pass
+
     # ── 6. Persist file to disk ───────────────────────────────────────────────
     upload_dir: Path = settings.get_upload_dir() / document_id
     upload_dir.mkdir(parents=True, exist_ok=True)
-    safe_filename = Path(file.filename or "upload").name  # strip path traversal
     file_path = upload_dir / safe_filename
 
     async with aiofiles.open(file_path, "wb") as f:
@@ -286,3 +344,53 @@ async def get_chunk(
         source=chunk_data["source"],
         parser_version=chunk_data["parser_version"],
     )
+
+
+# ── Delete document ───────────────────────────────────────────────────────────
+
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Delete a document and its indexed chunks",
+    description="Deletes document metadata from SQLite, all chunks from ChromaDB, cached queries, and local files.",
+)
+async def delete_document_endpoint(
+    document_id: str,
+    user_id: str = Depends(get_current_user_id),
+) -> Response:
+    doc = await document_store.get(document_id, user_id=user_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    # 1. Delete ChromaDB chunks
+    try:
+        delete_document(document_id)
+    except Exception as e:
+        logger.warning("Failed to delete ChromaDB chunks on delete", error=str(e))
+
+    # 2. Invalidate Redis cache
+    try:
+        await invalidate_document_cache(document_id)
+    except Exception as e:
+        logger.warning("Failed to invalidate cache on delete", error=str(e))
+
+    # 3. Delete from SQLite
+    await document_store.delete(document_id, user_id=user_id)
+    await job_store.delete_by_document(document_id)
+
+    # 4. Remove disk folders
+    try:
+        upload_dir = settings.get_upload_dir() / document_id
+        if upload_dir.exists():
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        ade_dir = Path(settings.ADE_OUTPUT_DIR) / document_id
+        if ade_dir.exists():
+            shutil.rmtree(ade_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

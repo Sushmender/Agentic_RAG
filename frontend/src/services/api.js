@@ -71,6 +71,7 @@ export const documentsAPI = {
   list: () => api.get('/documents/'),
   get: (documentId) => api.get(`/documents/${documentId}`),
   getChunk: (documentId, chunkId) => api.get(`/documents/${documentId}/chunks/${chunkId}`),
+  delete: (documentId) => api.delete(`/documents/${documentId}`),
 };
 
 // ── Job endpoints ──────────────────────────────────────────────────────────────

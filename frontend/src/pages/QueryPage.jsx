@@ -6,8 +6,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { toast } from 'sonner';
 import { documentsAPI, queryAPI } from '../services/api';
 import './QueryPage.css';
 
@@ -42,17 +44,23 @@ export default function QueryPage() {
   const [error, setError]               = useState(null);
   const [showDebug, setShowDebug]       = useState(false);
   const [docsLoading, setDocsLoading]   = useState(true);
+  const [docsError, setDocsError]       = useState(false);
   const textareaRef = useRef(null);
+  const navigate = useNavigate();
 
   /* Load completed documents for the document selector */
   useEffect(() => {
     setDocsLoading(true);
     documentsAPI.list()
       .then(res => {
-        const completed = (res.data || []).filter(d => d.status === 'completed');
+        const completed = (res.data.documents || res.data || []).filter(d => d.status === 'completed');
         setDocuments(completed);
+        setDocsError(false);
       })
-      .catch(() => setDocuments([]))
+      .catch(() => {
+        setDocuments([]);
+        setDocsError(true);
+      })
       .finally(() => setDocsLoading(false));
   }, []);
 
@@ -91,8 +99,20 @@ export default function QueryPage() {
       const res = await queryAPI.query(payload);
       setResult(res.data);
     } catch (err) {
+      const status = err.response?.status;
       const detail = err.response?.data?.detail || err.message || 'Query failed.';
-      setError(detail);
+      if (status === 429) {
+        const msg = 'Rate limit reached. Please wait a moment before trying again.';
+        setError(msg);
+        toast.warning(msg);
+      } else if (status >= 500) {
+        const msg = `Server error: ${detail}`;
+        setError(msg);
+        toast.error(msg);
+      } else {
+        setError(detail);
+        toast.error(detail);
+      }
     } finally {
       setLoading(false);
     }
@@ -113,6 +133,29 @@ export default function QueryPage() {
           Query your documents using multimodal RAG — text, tables, figures, and images.
         </p>
       </div>
+
+      {/* ── No documents CTA ───────────────────────────────────────────── */}
+      {!docsLoading && !docsError && documents.length === 0 && (
+        <div className="query-no-docs-banner">
+          <span className="query-no-docs-icon">📁</span>
+          <div>
+            <p className="query-no-docs-title">No processed documents yet</p>
+            <p className="query-no-docs-hint">
+              Upload and process a document first, then come back to ask questions.
+            </p>
+          </div>
+          <button className="query-no-docs-btn" onClick={() => navigate('/')}>
+            Upload Documents →
+          </button>
+        </div>
+      )}
+
+      {docsError && (
+        <div className="query-error-banner" role="alert">
+          <span>⚠️</span>
+          <span>Could not load documents. Is the backend running?</span>
+        </div>
+      )}
 
       {/* ── Query form ─────────────────────────────────────────────────── */}
       <form className="query-form" onSubmit={handleSubmit}>

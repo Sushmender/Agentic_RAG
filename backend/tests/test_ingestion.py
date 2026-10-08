@@ -132,6 +132,34 @@ class TestDocumentUpload:
         assert "already exists" in resp2.json().get("message", "").lower() or \
                resp1.json()["job_id"] == resp2.json()["job_id"]
 
+    def test_upload_same_filename_different_content_overwrites(self):
+        """Uploading different content with the same filename replaces the old document."""
+        token = _register_and_login()
+        pdf_v1 = _make_pdf_bytes(b"%PDF-1.4 version 1 " + uuid.uuid4().bytes)
+        pdf_v2 = _make_pdf_bytes(b"%PDF-1.4 version 2 different " + uuid.uuid4().bytes)
+
+        resp1 = _upload_pdf(token, filename="report.pdf", content=pdf_v1)
+        assert resp1.status_code == 202
+        doc_id_1 = resp1.json()["document_id"]
+
+        # Verify doc 1 exists in user's documents
+        list_resp1 = client.get("/api/v1/documents/", headers=_auth_headers(token))
+        docs1 = list_resp1.json()["documents"]
+        assert any(d["document_id"] == doc_id_1 for d in docs1)
+
+        # Upload v2 with the SAME filename
+        resp2 = _upload_pdf(token, filename="report.pdf", content=pdf_v2)
+        assert resp2.status_code == 202
+        doc_id_2 = resp2.json()["document_id"]
+        assert doc_id_1 != doc_id_2
+
+        # Verify doc 1 was replaced and only doc 2 remains with this filename
+        list_resp2 = client.get("/api/v1/documents/", headers=_auth_headers(token))
+        docs2 = list_resp2.json()["documents"]
+        matching_docs = [d for d in docs2 if d["filename"] == "report.pdf"]
+        assert len(matching_docs) == 1
+        assert matching_docs[0]["document_id"] == doc_id_2
+
     def test_upload_requires_auth(self):
         """Upload without token → 401."""
         files = {"file": ("test.pdf", io.BytesIO(b"%PDF-1.4 test"), "application/pdf")}
@@ -183,8 +211,8 @@ class TestListDocuments:
         file_a = b"%PDF-1.4 list test A " + uuid.uuid4().bytes
         file_b = b"%PDF-1.4 list test B " + uuid.uuid4().bytes
 
-        r1 = _upload_pdf(token, content=file_a)
-        r2 = _upload_pdf(token, content=file_b)
+        r1 = _upload_pdf(token, filename="file_a.pdf", content=file_a)
+        r2 = _upload_pdf(token, filename="file_b.pdf", content=file_b)
         assert r1.status_code == 202
         assert r2.status_code == 202
 
@@ -311,6 +339,10 @@ class TestGetJob:
             "app.services.ingestion_service.ade_provider.parse_document",
             new_callable=AsyncMock,
             return_value=mock_ade_result,
+        ), patch(
+            "app.services.embedding_service.embedding_provider.embed_passages",
+            new_callable=AsyncMock,
+            return_value=[[0.0] * 2048],
         ):
             token = _register_and_login()
             pdf_bytes = b"%PDF-1.4 completion test " + uuid.uuid4().bytes

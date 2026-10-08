@@ -75,6 +75,20 @@ class DocumentStore:
         if error_message is not None:
             doc.error_message = error_message
 
+    def get_by_filename(self, filename: str, user_id: str) -> list[DocumentMetadata]:
+        """Fetch all documents with the given filename owned by user_id."""
+        docs = [d for d in self._store.values() if d.user_id == user_id and d.filename == filename]
+        return sorted(docs, key=lambda d: d.created_at, reverse=True)
+
+    def delete(self, document_id: str, user_id: str | None = None) -> bool:
+        doc = self._store.get(document_id)
+        if doc is None:
+            return False
+        if user_id is not None and doc.user_id != user_id:
+            return False
+        del self._store[document_id]
+        return True
+
     def exists(self, document_id: str) -> bool:
         return document_id in self._store
 
@@ -138,6 +152,12 @@ class JobStore:
             job.chunks_created = chunks_created
         if chunks_embedded is not None:
             job.chunks_embedded = chunks_embedded
+
+    def delete_by_document(self, document_id: str) -> None:
+        to_del = [jid for jid, j in self._store.items() if j.document_id == document_id]
+        for jid in to_del:
+            del self._store[jid]
+        self._doc_index.pop(document_id, None)
 
     def exists(self, job_id: str) -> bool:
         return job_id in self._store

@@ -38,6 +38,8 @@ def banner(title: str):
 # ---------------------------------------------------------------------------
 def test_connection() -> bool:
     banner("Step 1: Auth + Connectivity (0 credits)")
+    # ...
+
 
     if not API_KEY or API_KEY == "your_landingai_api_key_here":
         print("[WARNING] LANDINGAI_API_KEY is not set. Update your .env file.")
@@ -77,6 +79,9 @@ def test_connection() -> bool:
     except requests.exceptions.RequestException as e:
         print(f"[ERROR] Request failed: {e}")
         return False
+
+
+test_connection.__test__ = False
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +146,9 @@ def test_parse_sample(file_path: str, model: str = DEFAULT_MODEL) -> dict | None
         print("[INFO] No 'chunks' attribute found — inspect raw response manually.")
 
     return response
+
+
+test_parse_sample.__test__ = False
 
 
 # ---------------------------------------------------------------------------

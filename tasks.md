@@ -397,32 +397,27 @@
 ## Day 9 — Production Hardening & Final Polish
 
 ### Backend
-- [ ] Production hardening:
-  - [ ] Add global exception handler — catch unhandled exceptions, return `500` with `request_id`
-  - [ ] Add rate limiting on `POST /query` — max 10 req/minute per IP using `slowapi`
-  - [ ] Sanitize all file inputs — check MIME type with `python-magic`, not just extension
-  - [ ] Enforce `MAX_UPLOAD_SIZE_MB` in upload endpoint (reject before reading full body)
-  - [ ] Configure CORS: `ALLOWED_ORIGINS` from env
-  - [ ] Confirm no hardcoded API keys anywhere (grep check in CI)
-  - [ ] Add `HEAD /health` support
-  - [ ] Add request body size limit middleware
-- [ ] Create `docker-compose.yml`:
-  - `backend` service: FastAPI + uvicorn
-  - `frontend` service: Vite build served by nginx
-  - `redis` service: `redis:7-alpine`
-  - `chromadb` service: `chromadb/chroma` (or use local persistent volume)
-  - Mount `data/` as volume
-- [ ] Full code Consistency check and cleanup
-- [ ] Create a Readme.md for complete project in the outer folder of this project
+- [x] Production hardening:
+  - [x] Add global exception handler — catch unhandled exceptions, return `500` with `request_id`
+  - [ ] Add rate limiting on `POST /query` — max 10 req/minute per IP using `slowapi` (deferred — see Future Tasks)
+  - [x] Sanitize all file inputs — check MIME type with `python-magic`, not just extension
+  - [x] Enforce `MAX_UPLOAD_SIZE_MB` in upload endpoint (reject before reading full body)
+  - [x] Configure CORS: `ALLOWED_ORIGINS` from env
+  - [x] Confirm no hardcoded API keys anywhere (grep check passed)
+  - [x] Add `HEAD /health` support
+  - [ ] Add request body size limit middleware (deferred — see Future Tasks)
+- [ ] Create `docker-compose.yml` (deferred — see Future Tasks)
+- [x] Full code Consistency check and cleanup
+- [x] Create a Readme.md for complete project in the outer folder of this project
 
 ### Frontend
-- [ ] Full polish:
-  - [ ] Responsive layout (mobile-friendly)
-  - [ ] Error state components (network error, 4xx, 5xx messages)
-  - [ ] Empty state for no documents uploaded
-  - [ ] Empty state for no query results
-  - [ ] Loading skeleton components
-  - [ ] Toast notifications for upload success/failure
+- [x] Full polish:
+  - [x] Error state components (network error, 4xx, 5xx messages)
+  - [x] Empty state for no documents uploaded
+  - [x] Empty state for no query results
+  - [x] Loading skeleton components
+  - [x] Toast notifications for upload success/failure (using sonner)
+  - [ ] Responsive layout (mobile-friendly) (deferred — see Future Tasks)
 
 ### Verification
 - [ ] Rate limiter blocks > 10 requests/minute from same IP on `/query`
@@ -448,3 +443,26 @@
 | 7 | Observability | 5 benchmark categories, SQLite persistence, `/metrics` endpoint |
 | 8 | RAG Evaluation & Source Grounding | Recall@K / Precision@K, Gold dataset, Evaluation endpoints, Source grounding |
 | 9 | Production Hardening & Polish | Docker Compose, rate limiting, full polish, code consistency check, project Readme |
+
+---
+
+## Future Tasks (Post Day 9 — Deferred)
+
+### Infrastructure
+- [ ] Create `docker-compose.yml` — services: `backend` (FastAPI+uvicorn), `frontend` (Vite+nginx), `redis` (redis:7-alpine), `chromadb` (chromadb/chroma or embedded)
+- [ ] Decide: embed ChromaDB in backend container vs separate `chromadb` service
+- [ ] Create `backend/Dockerfile` and `frontend/Dockerfile` (multi-stage Vite → nginx)
+- [ ] Create `frontend/nginx.conf` (SPA routing + `/api` proxy to backend)
+- [ ] CI: add grep check to confirm no hardcoded API keys in source (`sk-or-v1`, `gsk_`, etc.)
+
+### Rate Limiting
+- [ ] Wire `slowapi` into `main.py` — `Limiter(key_func=get_remote_address)`, `SlowAPIMiddleware`, `RateLimitExceeded` handler
+- [ ] Apply `@limiter.limit("10/minute")` on `POST /query` endpoint
+- [ ] Decide: IP-based vs JWT user_id-based rate limiting key
+- [ ] Add request body size limit middleware for early rejection (before body read)
+
+### Frontend — Mobile / Responsive
+- [ ] Responsive layout (mobile-friendly) for `DocumentsPage.jsx`, `QueryPage.jsx`, `Navbar.jsx`
+- [ ] Navbar: hamburger menu with slide-out drawer on mobile (`< 640px`)
+- [ ] DocumentsPage: single-column grid on mobile
+- [ ] QueryPage: stacked layout (form above results) on mobile

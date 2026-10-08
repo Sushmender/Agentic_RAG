@@ -48,7 +48,7 @@ def get_chroma_client() -> chromadb.ClientAPI:
     """Return the initialized ChromaDB client (persistent or ephemeral in tests)."""
     global _chroma_client
     if _chroma_client is None:
-        raise RuntimeError("ChromaDB client not initialized. Call init_chromadb() first.")
+        init_chromadb()
     return _chroma_client
 
 
@@ -56,7 +56,7 @@ def get_collection() -> Collection:
     """Return the main ChromaDB collection for document chunks."""
     global _collection
     if _collection is None:
-        raise RuntimeError("ChromaDB collection not initialized. Call init_chromadb() first.")
+        init_chromadb()
     return _collection
 
 

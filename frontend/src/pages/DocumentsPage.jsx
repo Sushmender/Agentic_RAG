@@ -1,16 +1,17 @@
 /**
  * frontend/src/pages/DocumentsPage.jsx
- * Day 1+2 — Full implementation:
+ * Day 1–9 — Full implementation:
  *   - Drag-and-drop upload via react-dropzone
  *   - Upload progress + job status polling (2s interval)
  *   - Document list with color-coded status badges
  *   - View Details panel: chunk count, chunk types, ADE credits, parser version
- *   - Empty state, error toasts, "Query" navigation
+ *   - Empty state, skeleton loading, sonner toast notifications, error banner
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
+import { toast } from 'sonner';
 import { documentsAPI, jobsAPI } from '../services/api';
 import './DocumentsPage.css';
 
@@ -30,7 +31,7 @@ function StatusBadge({ status }) {
 }
 
 // ── Document card ──────────────────────────────────────────────────────────────
-function DocumentCard({ doc, onQuery }) {
+function DocumentCard({ doc, onQuery, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const sizeKB = (doc.file_size_bytes / 1024).toFixed(1);
 
@@ -161,29 +162,55 @@ function DocumentCard({ doc, onQuery }) {
 
       <div className="doc-card__right">
         <StatusBadge status={doc.status} />
-        {doc.status === 'completed' && (
+        <div className="doc-card__action-group">
+          {doc.status === 'completed' && (
+            <button
+              className="doc-card__query-btn"
+              onClick={() => onQuery(doc.document_id)}
+            >
+              Query →
+            </button>
+          )}
           <button
-            className="doc-card__query-btn"
-            onClick={() => onQuery(doc.document_id)}
+            className="doc-card__delete-btn"
+            title="Delete document"
+            onClick={() => onDelete(doc.document_id, doc.filename)}
           >
-            Query →
+            🗑️
           </button>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Toast notification ─────────────────────────────────────────────────────────
-function Toast({ toasts, onDismiss }) {
+// ── Skeleton loader for document cards ────────────────────────────────────────
+function DocCardSkeleton() {
   return (
-    <div className="toast-container">
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast toast--${t.type} animate-fade-in`}>
-          <span>{t.message}</span>
-          <button className="toast__close" onClick={() => onDismiss(t.id)}>×</button>
-        </div>
-      ))}
+    <div className="doc-card doc-card--skeleton">
+      <div className="skeleton skeleton-icon" />
+      <div className="doc-card__body">
+        <div className="skeleton skeleton-title" />
+        <div className="skeleton skeleton-meta" />
+      </div>
+      <div className="doc-card__right">
+        <div className="skeleton skeleton-badge" />
+      </div>
+    </div>
+  );
+}
+
+// ── Network error banner ───────────────────────────────────────────────────────
+function ErrorBanner({ message, onRetry }) {
+  return (
+    <div className="error-banner" role="alert">
+      <span className="error-banner__icon">⚠️</span>
+      <span className="error-banner__text">{message}</span>
+      {onRetry && (
+        <button className="error-banner__retry" onClick={onRetry}>
+          Retry
+        </button>
+      )}
     </div>
   );
 }
@@ -255,26 +282,21 @@ export default function DocumentsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [toasts, setToasts] = useState([]);
+  const [loadError, setLoadError] = useState(null);
 
   // Polling refs: map of jobId → intervalId
   const pollingRefs = useRef({});
 
-  // ── Toast helpers ────────────────────────────────────────────────────────────
-  const addToast = (message, type = 'success') => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => dismissToast(id), 5000);
-  };
-  const dismissToast = (id) => setToasts((prev) => prev.filter((t) => t.id !== id));
-
   // ── Load document list ───────────────────────────────────────────────────────
   const loadDocuments = async () => {
+    setLoadError(null);
     try {
       const resp = await documentsAPI.list();
       setDocuments(resp.data.documents || []);
     } catch (err) {
-      addToast('Failed to load documents', 'error');
+      const msg = err.response?.data?.detail || 'Failed to load documents. Is the backend running?';
+      setLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -306,11 +328,11 @@ export default function DocumentsPage() {
         if (job.status === 'completed') {
           clearInterval(intervalId);
           delete pollingRefs.current[jobId];
-          addToast(`✅ "${docResp.data.filename}" processed successfully`, 'success');
+          toast.success(`"${docResp.data.filename}" processed successfully! 🧩 ${docResp.data.chunk_count || 0} chunks indexed.`);
         } else if (job.status === 'failed') {
           clearInterval(intervalId);
           delete pollingRefs.current[jobId];
-          addToast(`❌ Processing failed: ${job.error_message || 'Unknown error'}`, 'error');
+          toast.error(`Processing failed: ${job.error_message || 'Unknown error'}`);
         }
       } catch {
         // Ignore transient poll errors
@@ -325,6 +347,8 @@ export default function DocumentsPage() {
     setUploading(true);
     setUploadProgress(0);
 
+    const toastId = toast.loading(`Uploading "${file.name}"…`);
+
     try {
       const resp = await documentsAPI.upload(file, (progressEvent) => {
         if (progressEvent.total) {
@@ -332,17 +356,29 @@ export default function DocumentsPage() {
         }
       });
 
-      const { document_id, job_id, message } = resp.data;
+      const { document_id, job_id, status: uploadStatus } = resp.data;
+
+      toast.dismiss(toastId);
+
+      if (uploadStatus === 'completed') {
+        // Already processed (idempotent re-upload)
+        toast.info(`"${file.name}" already processed — returning existing record.`);
+      } else {
+        toast.success(`"${file.name}" uploaded! Processing in background…`);
+      }
 
       // Refresh list to include new doc
       await loadDocuments();
-      addToast(message || '📤 File uploaded — processing started', 'success');
 
       // Start polling
       startPolling(job_id, document_id);
     } catch (err) {
-      const detail = err.response?.data?.detail || 'Upload failed. Please try again.';
-      addToast(`❌ ${detail}`, 'error');
+      toast.dismiss(toastId);
+      const status = err.response?.status;
+      let detail = err.response?.data?.detail || 'Upload failed. Please try again.';
+      if (status === 413) detail = `File too large. Maximum upload size is 50 MB.`;
+      if (status === 415) detail = `Unsupported file type. Allowed: PDF, DOCX, PPTX, XLSX, PNG, JPG, WEBP.`;
+      toast.error(detail);
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -354,10 +390,21 @@ export default function DocumentsPage() {
     navigate(`/query?doc=${documentId}`);
   };
 
+  // ── Delete document ──────────────────────────────────────────────────────────
+  const handleDelete = async (documentId, filename) => {
+    if (!window.confirm(`Delete "${filename}"? All chunks and embeddings will be removed.`)) return;
+    try {
+      await documentsAPI.delete(documentId);
+      toast.success(`"${filename}" deleted.`);
+      setDocuments((prev) => prev.filter((d) => d.document_id !== documentId));
+    } catch {
+      toast.error(`Failed to delete "${filename}".`);
+    }
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="page documents-page">
-      <Toast toasts={toasts} onDismiss={dismissToast} />
 
       <div className="page-header">
         <h1 className="page-title">📁 Documents</h1>
@@ -365,6 +412,13 @@ export default function DocumentsPage() {
           Upload your business documents for multimodal RAG processing.
         </p>
       </div>
+
+      {loadError && (
+        <ErrorBanner
+          message={loadError}
+          onRetry={() => { setLoading(true); loadDocuments(); }}
+        />
+      )}
 
       <UploadZone
         onUpload={handleUpload}
@@ -381,15 +435,23 @@ export default function DocumentsPage() {
         </div>
 
         {loading ? (
-          <div className="doc-loading">
-            <div className="spinner" />
-            <span>Loading documents…</span>
+          <div className="doc-card-list">
+            {[1, 2, 3].map(i => <DocCardSkeleton key={i} />)}
           </div>
-        ) : documents.length === 0 ? (
-          <div className="empty-state">
+        ) : !loadError && documents.length === 0 ? (
+          <div className="empty-state empty-state--full">
             <span className="empty-icon">📂</span>
-            <p>No documents yet.</p>
-            <p className="empty-hint">Upload your first document to get started.</p>
+            <h3 className="empty-title">No documents yet</h3>
+            <p className="empty-hint">
+              Drag & drop a file above or click <strong>Choose File</strong> to upload your first document.
+            </p>
+            <ul className="empty-formats">
+              <li>📄 PDF</li>
+              <li>📝 DOCX</li>
+              <li>📊 PPTX</li>
+              <li>📈 XLSX</li>
+              <li>🖼️ PNG / JPG / WEBP</li>
+            </ul>
           </div>
         ) : (
           <div className="doc-card-list">
@@ -398,6 +460,7 @@ export default function DocumentsPage() {
                 key={doc.document_id}
                 doc={doc}
                 onQuery={handleQuery}
+                onDelete={handleDelete}
               />
             ))}
           </div>

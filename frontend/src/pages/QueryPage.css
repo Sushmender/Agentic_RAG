@@ -1009,3 +1009,69 @@
   letter-spacing: 0.01em;
 }
 
+/* ── No documents uploaded banner ───────────────────────────────────────── */
+.query-no-docs-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 14px;
+  margin-bottom: 1.5rem;
+  animation: fadeIn 0.3s ease;
+}
+
+.query-no-docs-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.query-no-docs-title {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.query-no-docs-hint {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.query-no-docs-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.5rem 1.1rem;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s;
+  white-space: nowrap;
+}
+
+.query-no-docs-btn:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+/* ── Query error banner ──────────────────────────────────────────────────── */
+.query-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1.25rem;
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 10px;
+  margin-bottom: 1.25rem;
+  color: #f87171;
+  font-size: 0.875rem;
+}
+
+

@@ -264,6 +264,12 @@
   flex-shrink: 0;
 }
 
+.doc-card__action-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .doc-card__query-btn {
   font-size: 0.78rem;
   font-weight: 600;
@@ -280,6 +286,23 @@
 .doc-card__query-btn:hover {
   background: rgba(99,102,241,0.2);
   color: #c7d2fe;
+}
+
+.doc-card__delete-btn {
+  font-size: 0.82rem;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 6px;
+  padding: 0.22rem 0.45rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.doc-card__delete-btn:hover {
+  background: rgba(239,68,68,0.2);
+  border-color: rgba(239,68,68,0.4);
+  transform: scale(1.05);
 }
 
 /* ── Empty / loading states ──────────────────────────────────────────────────── */
@@ -504,3 +527,90 @@
   white-space: nowrap;
   max-width: 160px;
 }
+
+/* ── Skeleton loader ─────────────────────────────────────────────────────────── */
+.doc-card--skeleton {
+  pointer-events: none;
+}
+
+.skeleton {
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-icon  { width: 40px; height: 40px; border-radius: 8px; flex-shrink: 0; }
+.skeleton-title { width: 60%; height: 14px; margin-bottom: 6px; }
+.skeleton-meta  { width: 40%; height: 10px; }
+.skeleton-badge { width: 70px; height: 22px; border-radius: 999px; }
+
+/* ── Error banner ────────────────────────────────────────────────────────────── */
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 10px;
+  margin-bottom: 1.5rem;
+  color: #f87171;
+  font-size: 0.875rem;
+}
+
+.error-banner__icon { font-size: 1.1rem; flex-shrink: 0; }
+.error-banner__text { flex: 1; }
+
+.error-banner__retry {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 6px;
+  color: #f87171;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.error-banner__retry:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* ── Enhanced empty state ────────────────────────────────────────────────────── */
+.empty-state--full {
+  text-align: center;
+  padding: 3rem 2rem;
+}
+
+.empty-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  margin: 0.5rem 0;
+}
+
+.empty-formats {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  list-style: none;
+  margin-top: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.empty-formats li {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+

@@ -1,6 +1,6 @@
-# Test Run Guide — Multimodal RAG Platform (Days 0–8)
+# Test Run Guide — Multimodal RAG Platform (Days 0–9)
 
-> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · Day 6 Redis Cache Pipeline · Day 7 Telemetry + SQLite Persistence + Metrics Dashboard · **Day 8 RAG Evaluation + Source Grounding**  
+> **Status built:** Day 0 Foundation · Day 1 Upload + Ingestion · Day 2 ADE + Chunking · Day 3 Embedding + ChromaDB · Day 4 Query Router + Retrieval · Day 5 Reranking + Context Assembly + LLM Generation · Day 6 Redis Cache Pipeline · Day 7 Telemetry + SQLite Persistence + Metrics Dashboard · Day 8 RAG Evaluation + Source Grounding · **Day 9 Production Hardening & Documentation**  
 > **Stack:** FastAPI (Python 3.12) · React + Vite · LandingAI ADE · ChromaDB · OpenRouter (NVIDIA Nemotron Embed + Reranker + Nemotron 120B) · Groq (Qwen 3.8 27B) · Redis / Upstash · SQLite (aiosqlite) · JSONL telemetry
 
 ---
@@ -2246,6 +2246,179 @@ INFO  HTTP request              method=GET  path=/api/v1/evaluation/run?k=5  sta
 
 ---
 
+## Day 9 — Production Hardening, MIME Validation & Developer Documentation
+
+> [!NOTE]
+> Day 9 hardens the backend and frontend for production readiness: magic-byte MIME sniffing prevents extension spoofing, global 500 handling returns safe correlation IDs, ChromaDB and SQLite feature lazy auto-initialization and automatic schema migrations, and the frontend includes non-blocking toast notifications and direct upload CTAs.
+
+### 9.1 Automated Tests
+
+Run the full end-to-end automated test suite across all 11 test modules:
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+.venv\Scripts\python.exe -m pytest -v
+```
+
+**Expected:** All 145 tests pass:
+```
+====================== 145 passed, 46 warnings in ~45s ======================
+```
+
+Verify the frontend production bundle builds cleanly with zero errors:
+
+```powershell
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\frontend
+npm run build
+```
+
+**Expected:**
+```
+✓ 347 modules transformed.
+✓ built in ~900ms (0 errors)
+```
+
+---
+
+### 9.2 Magic-Byte MIME Validation (`POST /api/v1/documents/upload`)
+
+Security hardening: File extensions can be falsified by attackers (e.g., renaming a dangerous executable `malware.exe` to `invoice.pdf`). 
+
+- The upload endpoint reads the file's first 4,096 bytes and inspects the binary magic numbers using `python-magic-bin` (libmagic wrapper).
+- Even if the client sends `Content-Type: application/pdf`, if the magic bytes don't match an allowed document or image MIME type, the server rejects the upload immediately with `415 Unsupported Media Type`.
+- If libmagic DLLs are unavailable on a specific platform, it logs a warning and falls back to client-reported MIME type validation gracefully.
+
+**Expected backend log:**
+```
+DEBUG  MIME detected via magic bytes    detected_mime=application/pdf
+```
+
+---
+
+### 9.3 Global Exception Handling & Request ID Tracing
+
+All API traffic is assigned a stable correlation identifier:
+
+1. **`request_id_middleware`**: Injects or echoes `X-Request-ID` into every HTTP request/response and binds `request_id` to `structlog` context.
+2. **Global 500 Handler**: Catches any unhandled Python exception, logs the complete traceback internally with the active `request_id`, and returns a clean, safe JSON payload:
+   ```json
+   {
+     "detail": "An internal server error occurred.",
+     "request_id": "cda632f7-7bc9-4408-b2ee-18c46a41bed0"
+   }
+   ```
+   No sensitive system paths, secrets, or internal stack traces leak to the client.
+
+---
+
+### 9.4 Fast Health Probe (`HEAD /health`)
+
+Optimized for container orchestrators (Kubernetes liveness/readiness probes) and AWS/GCP load balancers:
+
+- `GET /api/v1/health` → Performs deep connectivity checks against ChromaDB and Redis (returns JSON).
+- `HEAD /api/v1/health` → Returns immediate HTTP `200 OK` with zero response body bytes, avoiding unnecessary network payload overhead during high-frequency health polling.
+
+---
+
+### 9.5 Frontend Hardening & UX Polish
+
+1. **Toast Notification System (`DocumentsPage.jsx`)**:
+   - Floating non-blocking status notifications for document uploads, deletions, and background job states.
+   - Auto-dismisses after 4 seconds with smooth fade-in/fade-out animations.
+2. **Empty State Call-to-Action (`QueryPage.jsx`)**:
+   - If the user has not uploaded any documents yet, the Query selector displays a friendly empty state card with an **Upload Documents** button that navigates directly to the Documents tab.
+3. **Ingestion Error Recovery**:
+   - When a background ingestion job fails, the document list displays a red `Failed` badge with an inline tooltip displaying the specific error reason and a **Retry Ingestion** action.
+
+---
+
+### 9.6 SQLite & ChromaDB Resilience
+
+1. **Automatic SQLite Migrations (`sqlite_store.py`)**:
+   - Startup migration (`init_sqlite()`) verifies existing database tables and runs `ALTER TABLE documents ADD COLUMN` for `mime_type` and `file_size_bytes` without requiring manual schema migrations or data wipes.
+2. **Lazy Initialization (`chromadb_client.py`)**:
+   - `get_chroma_client()` and `get_collection()` lazily initialize the ChromaDB client if called in testing contexts or standalone CLI scripts where FastAPI lifespan hooks do not run.
+
+---
+
+### 9.7 Developer Documentation (`README.md`)
+
+A comprehensive, developer-ready `README.md` is provided at the repository root covering:
+- System Architecture Diagram (React + FastAPI + ChromaDB + Groq + OpenRouter + Redis)
+- Quickstart Guide (Prerequisites, backend setup, frontend setup, environment variables)
+- Complete API Reference (`/auth`, `/documents`, `/jobs`, `/query`, `/metrics`, `/evaluation`, `/health`)
+- Verification and Test Run instructions
+
+---
+
+### 9.8 PowerShell Verification Commands
+
+```powershell
+# 1. Test HEAD health check
+$headResp = Invoke-WebRequest -Uri "http://localhost:8000/api/v1/health" -Method Head
+Write-Host "HEAD Status:" $headResp.StatusCode "Body length:" $headResp.RawContentLength
+
+# 2. Verify X-Request-ID header in response
+$resp = Invoke-WebRequest -Uri "http://localhost:8000/api/v1/health" -Method Get
+Write-Host "Request ID:" $resp.Headers["X-Request-ID"]
+
+# 3. Test magic-byte validation by uploading an invalid spoofed file (renamed text file as PDF)
+$fakePdf = [System.IO.Path]::GetTempFileName() + ".pdf"
+Set-Content -Path $fakePdf -Value "This is plain text pretending to be a PDF"
+try {
+  $form = @{ file = Get-Item $fakePdf }
+  Invoke-RestMethod -Uri "http://localhost:8000/api/v1/documents/upload" -Method Post -Form $form `
+    -Headers @{ Authorization = "Bearer $token" }
+} catch {
+  Write-Host "Caught expected rejection:" $_.Exception.Response.StatusCode
+}
+Remove-Item $fakePdf -Force
+
+# 4. Run the full pytest test suite
+cd C:\Users\susmi\OneDrive\Desktop\Agentic_RAG\backend
+.venv\Scripts\python.exe -m pytest tests/test_ingestion.py -v
+```
+
+**Expected output:**
+```
+HEAD Status: 200 Body length: 0
+Request ID: 3e3cb8ac-e8bd-4840-8141-420391948dbb
+Caught expected rejection: UnsupportedMediaType
+All 16 ingestion tests PASSED
+```
+
+---
+
+### 9.9 Log Reading Guide — Hardened Ingestion & Magic Bytes
+
+```
+INFO   File saved                           document_id=3781db... filename=report.pdf size_bytes=104250
+DEBUG  MIME detected via magic bytes        detected_mime=application/pdf
+INFO   Job created                          job_id=e8f5530e... status=pending request_id=3e3cb8ac...
+INFO   HTTP request                         method=POST path=/api/v1/documents/upload status_code=202 latency_ms=48.8 request_id=3e3cb8ac...
+INFO   Starting ADE parse                   document_id=3781db... model=dpt-2-latest
+INFO   Normalizing ADE chunks               raw_chunk_count=12 page_count=2
+INFO   ChromaDB initialized                 collection=ade_documents existing_chunks=45
+INFO   Embedding complete                   new_chunks_indexed=12 skipped_chunks=0
+INFO   Job completed                        job_id=e8f5530e... status=completed
+```
+
+---
+
+### 9.10 Error Cases
+
+| Test | Expected |
+|---|---|
+| Upload file whose magic bytes do not match allowed MIME types | `415 Unsupported Media Type` (`File type '...' is not supported`) |
+| Upload empty file (0 bytes) | `422 Unprocessable Entity` (`Uploaded file is empty.`) |
+| Upload file exceeding `MAX_UPLOAD_SIZE_MB` | `413 Request Entity Too Large` |
+| `HEAD /api/v1/health` | `200 OK` with 0 body bytes |
+| Unhandled exception inside any route | `500 Internal Server Error` with `{"detail": "...", "request_id": "<uuid>"}` |
+| SQLite document retrieval with legacy missing columns | Auto-migrated with fallback MIME detection |
+| ChromaDB access outside lifespan context | Auto-initialized without throwing `RuntimeError` |
+
+---
+
 ## Pipeline Status — What Is Built vs What Remains
 
 | Day | Feature | Status |
@@ -2259,7 +2432,7 @@ INFO  HTTP request              method=GET  path=/api/v1/evaluation/run?k=5  sta
 | 6 | Redis Cache: query-answer caching, cache invalidation on re-ingestion, `/query/history` endpoint, ⚡ cache-hit badge | ✅ **Built** |
 | 7 | Observability: 5 benchmark categories, SQLite persistence, `/metrics` endpoint, 📊 Metrics dashboard | ✅ **Built** |
 | 8 | Evaluation + Source Grounding: Recall@K / Precision@K, Gold dataset, /evaluation/run endpoint, Evaluation Dashboard, BBox Visual Grounding | ✅ **Built** |
-| 9 | Production Hardening: Docker Compose, rate limiting, full polish, code consistency check, project Readme | Not built |
+| 9 | Production Hardening: Magic-byte MIME validation, global exception handler + request_id tracing, HEAD /health, toast notifications, empty state CTA, SQLite auto-migrations, full documentation | ✅ **Built** |
 
 ---
 
@@ -2320,5 +2493,14 @@ INFO  HTTP request              method=GET  path=/api/v1/evaluation/run?k=5  sta
 | `QueryPage.jsx` (`BBoxGrounding`) | Day 8 | Visual page thumbnail SVG with coordinate-mapped bounding box highlight per chunk type |
 | `Navbar.jsx` + `App.jsx` | Day 8 | 🎯 Evaluation nav link and `/evaluation` route added |
 | `tests/test_evaluation.py` | Day 8 | 26 unit tests — Recall@K, Precision@K, gold dataset helpers, file IO, pipeline evaluation |
+| `api/v1/endpoints/documents.py` (MIME sniffing) | Day 9 | Magic-byte MIME detection via `python-magic-bin` with graceful fallback |
+| `api/v1/endpoints/documents.py` (Replace/Overwrite) | Day 9 | Automatically replaces existing document with same filename, purging old ChromaDB chunks, Redis cache, and SQLite records |
+| `api/v1/endpoints/documents.py` (`DELETE /documents/{id}`) | Day 9 | Document deletion endpoint with full cascading cleanup across vector store, cache, and DB |
+| `db/sqlite_store.py` (schema migration & cascade) | Day 9 | Column migrations for `mime_type` and `file_size_bytes` + `get_by_filename`, `delete`, `delete_by_document` |
+| `db/chromadb_client.py` (lazy init) | Day 9 | Auto-initialize collection and client on demand when accessed outside lifespan |
+| `pages/DocumentsPage.jsx` (Toast system & Delete) | Day 9 | Toast notifications, inline error recovery, and document delete button with confirmation |
+| `pages/QueryPage.jsx` (Empty state CTA) | Day 9 | "No documents uploaded yet" prompt with direct navigate-to-upload button |
+| `README.md` | Day 9 | Comprehensive root documentation covering architecture, setup, endpoints, benchmarks |
+
 
 

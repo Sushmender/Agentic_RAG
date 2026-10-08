@@ -1,0 +1,20 @@
+[
+  {
+    "chunk_id": "8e3aafeea9fd991c004c6603487f69bc50f41aa434671e167513cad0a57fd61e",
+    "document_id": "39700065b5be3640cde8f9ba5cf1e6b8fc8b055f47f54309e21f4de05cf2abdc",
+    "chunk_type": "text",
+    "text": "<a id='test-chunk-001'></a>\n\nTest content from mock ADE",
+    "page": 0,
+    "bbox": [
+      0.1,
+      0.1,
+      0.9,
+      0.2
+    ],
+    "source": "test.pdf",
+    "parser_version": "dpt-2-test",
+    "image_data": null,
+    "ade_chunk_id": "test-chunk-001",
+    "confidence": 0.99
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "chunks": [
+    {
+      "id": "test-chunk-001",
+      "type": "text",
+      "markdown": "<a id='test-chunk-001'></a>\n\nTest content from mock ADE",
+      "grounding": {
+        "box": {
+          "left": 0.1,
+          "top": 0.1,
+          "right": 0.9,
+          "bottom": 0.2
+        },
+        "page": 0
+      }
+    }
+  ],
+  "markdown": "Test content from mock ADE",
+  "metadata": {
+    "credit_usage": 1.0,
+    "version": "dpt-2-test",
+    "page_count": 1,
+    "job_id": "mock-ade-job",
+    "duration_ms": 100,
+    "failed_pages": [],
+    "filename": "test.pdf"
+  },
+  "grounding": {
+    "test-chunk-001": {
+      "box": {
+        "left": 0.1,
+        "top": 0.1,
+        "right": 0.9,
+        "bottom": 0.2
+      },
+      "page": 0,
+      "type": "chunkText",
+      "confidence": 0.99,
+      "low_confidence_spans": []
+    }
+  },
+  "splits": []
+}

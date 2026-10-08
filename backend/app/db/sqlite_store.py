@@ -25,12 +25,14 @@ from typing import List, Optional
 import aiosqlite
 
 from app.core.logging import get_logger
-from app.schemas.document import DocumentMetadata, DocumentStatus
+from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
 from app.schemas.job import Job, JobStatus
 
 logger = get_logger(__name__)
 
-_DB_PATH = Path("./data/rag.db")
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_DB_PATH = _BACKEND_DIR / "data" / "rag.db"
+_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # ── DDL ────────────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,8 @@ CREATE TABLE IF NOT EXISTS documents (
     user_id         TEXT NOT NULL,
     filename        TEXT,
     document_type   TEXT,
+    mime_type       TEXT,
+    file_size_bytes INTEGER DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'pending',
     chunk_count     INTEGER,
     parser_version  TEXT,
@@ -98,6 +102,15 @@ async def init_sqlite() -> None:
         await db.execute(_CREATE_JOB_DOC_INDEX)
         await db.execute(_CREATE_DOC_USER_INDEX)
         await db.execute(_CREATE_USERS)
+
+        # Ensure migration columns exist
+        cur = await db.execute("PRAGMA table_info(documents)")
+        cols = [r[1] for r in await cur.fetchall()]
+        if "mime_type" not in cols:
+            await db.execute("ALTER TABLE documents ADD COLUMN mime_type TEXT")
+        if "file_size_bytes" not in cols:
+            await db.execute("ALTER TABLE documents ADD COLUMN file_size_bytes INTEGER DEFAULT 0")
+
         await db.commit()
     logger.info("SQLite store initialised", db_path=str(_DB_PATH))
 
@@ -108,21 +121,44 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_MIME_FALLBACK: dict[str, str] = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "tiff": "image/tiff",
+}
+
+
 def _doc_from_row(row: aiosqlite.Row) -> DocumentMetadata:
+    keys = row.keys() if hasattr(row, "keys") else []
+    raw_mime = row["mime_type"] if "mime_type" in keys else None
+    raw_size = row["file_size_bytes"] if "file_size_bytes" in keys else None
+    raw_type = row["document_type"] or ""
+
+    mime = raw_mime or _MIME_FALLBACK.get(raw_type.lower(), "application/octet-stream")
+    try:
+        doc_type = DocumentType(raw_type)
+    except (ValueError, TypeError):
+        doc_type = DocumentType.UNKNOWN
+
     return DocumentMetadata(
         document_id=row["document_id"],
         user_id=row["user_id"],
         filename=row["filename"] or "",
-        document_type=row["document_type"] or "",
+        document_type=doc_type,
         status=DocumentStatus(row["status"]),
-        chunk_count=row["chunk_count"],
+        chunk_count=row["chunk_count"] or 0,
         parser_version=row["parser_version"],
-        ade_credits_used=row["ade_credits_used"],
+        ade_credits_used=row["ade_credits_used"] or 0.0,
         embedding_model=row["embedding_model"],
         error_message=row["error_message"],
-        file_path=row["file_path"],
-        mime_type="",           # not persisted in SQLite — display-only field
-        file_size_bytes=0,      # not persisted in SQLite — display-only field
+        mime_type=mime,
+        file_size_bytes=raw_size if raw_size is not None else 0,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -155,15 +191,18 @@ class DocumentSQLiteStore:
 
     async def save(self, doc: DocumentMetadata) -> None:
         """Insert or replace a document record (upsert by document_id)."""
+        doc_type_val = doc.document_type.value if hasattr(doc.document_type, "value") else str(doc.document_type)
         async with aiosqlite.connect(_DB_PATH) as db:
             await db.execute(
                 """
                 INSERT INTO documents
-                    (document_id, user_id, filename, document_type, status,
+                    (document_id, user_id, filename, document_type, mime_type, file_size_bytes, status,
                      chunk_count, parser_version, ade_credits_used, embedding_model,
                      error_message, file_path, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(document_id) DO UPDATE SET
+                    mime_type       = excluded.mime_type,
+                    file_size_bytes = excluded.file_size_bytes,
                     status          = excluded.status,
                     chunk_count     = excluded.chunk_count,
                     parser_version  = excluded.parser_version,
@@ -174,7 +213,8 @@ class DocumentSQLiteStore:
                     updated_at      = excluded.updated_at
                 """,
                 (
-                    doc.document_id, doc.user_id, doc.filename, doc.document_type,
+                    doc.document_id, doc.user_id, doc.filename, doc_type_val,
+                    doc.mime_type, doc.file_size_bytes,
                     doc.status.value,
                     doc.chunk_count, doc.parser_version, doc.ade_credits_used,
                     doc.embedding_model, doc.error_message,
@@ -255,6 +295,33 @@ class DocumentSQLiteStore:
                 ),
             )
             await db.commit()
+
+    async def get_by_filename(self, filename: str, user_id: str) -> List[DocumentMetadata]:
+        """Fetch all documents with the given filename owned by user_id."""
+        async with aiosqlite.connect(_DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM documents WHERE filename=? AND user_id=? ORDER BY created_at DESC",
+                (filename, user_id),
+            )
+            rows = await cur.fetchall()
+        return [_doc_from_row(r) for r in rows]
+
+    async def delete(self, document_id: str, user_id: str | None = None) -> bool:
+        """Delete a document record by document_id (and optionally user_id)."""
+        async with aiosqlite.connect(_DB_PATH) as db:
+            if user_id:
+                cur = await db.execute(
+                    "DELETE FROM documents WHERE document_id=? AND user_id=?",
+                    (document_id, user_id),
+                )
+            else:
+                cur = await db.execute(
+                    "DELETE FROM documents WHERE document_id=?",
+                    (document_id,),
+                )
+            await db.commit()
+            return cur.rowcount > 0
 
     async def exists(self, document_id: str) -> bool:
         async with aiosqlite.connect(_DB_PATH) as db:
@@ -381,6 +448,12 @@ class JobSQLiteStore:
         async with aiosqlite.connect(_DB_PATH) as db:
             cur = await db.execute("SELECT 1 FROM jobs WHERE job_id=?", (job_id,))
             return await cur.fetchone() is not None
+
+    async def delete_by_document(self, document_id: str) -> None:
+        """Delete all jobs associated with a document_id."""
+        async with aiosqlite.connect(_DB_PATH) as db:
+            await db.execute("DELETE FROM jobs WHERE document_id=?", (document_id,))
+            await db.commit()
 
     async def count(self) -> int:
         async with aiosqlite.connect(_DB_PATH) as db:
