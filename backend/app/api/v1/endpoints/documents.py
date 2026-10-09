@@ -11,8 +11,10 @@ GET  /documents/{id}/chunks/{chunk_id} — fetch chunk from ChromaDB
 from __future__ import annotations
 
 import hashlib
+import io
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -79,6 +81,22 @@ def _detect_doc_type(mime: str, filename: str) -> DocumentType:
         return DocumentType.UNKNOWN
 
 
+def _inspect_ooxml_mimetype(file_bytes: bytes) -> str | None:
+    """Inspect a ZIP container to identify Office OpenXML document types (DOCX, PPTX, XLSX)."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as zf:
+            names = zf.namelist()
+            if any(name.startswith("word/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if any(name.startswith("ppt/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            if any(name.startswith("xl/") for name in names):
+                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    except Exception:
+        pass
+    return None
+
+
 # ── Upload endpoint ────────────────────────────────────────────────────────────
 
 @router.post(
@@ -130,6 +148,13 @@ async def upload_document(
         # Fallback: use browser-reported content type (less secure)
         content_type = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
         log.warning("python-magic unavailable — using client-reported MIME type", content_type=content_type)
+
+    # Office OpenXML files (.docx, .pptx, .xlsx) are ZIP archives; libmagic often detects them as application/zip
+    if content_type in ("application/zip", "application/x-zip-compressed", "application/octet-stream"):
+        ooxml_type = _inspect_ooxml_mimetype(file_bytes)
+        if ooxml_type:
+            content_type = ooxml_type
+            log.debug("OOXML container identified", detected_mime=content_type)
 
     if content_type not in [m.lower() for m in settings.ALLOWED_MIME_TYPES]:
         raise HTTPException(

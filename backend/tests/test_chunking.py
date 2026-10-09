@@ -231,6 +231,24 @@ class TestNormalizeChunks:
 
         assert reloaded_ids == second_ids
 
+    def test_figure_chunk_with_chart_markup_survives(self):
+        """Regression: figure chunk with <:: ... : chart::> markup must not be skipped as empty."""
+        figure_raw = {
+            "id": "chunk-fig-regression",
+            "type": "figure",
+            "markdown": "<a id='chunk-fig-regression'></a>\n\n<::Monthly Active Users (H1 2026)\n\n| Month | Users |\n| Jan | 12,000 |\n: chart::>",
+            "grounding": {
+                "box": {"left": 0.1, "top": 0.2, "right": 0.8, "bottom": 0.7},
+                "page": 0,
+            },
+        }
+        raw = _make_ade_result([figure_raw])
+        chunks = normalize_chunks(raw, document_id=DOCUMENT_ID, source=SOURCE)
+        assert len(chunks) == 1
+        assert chunks[0].chunk_type == ChunkType.FIGURE
+        assert "Monthly Active Users" in chunks[0].text
+        assert ": chart::>" in chunks[0].text
+
 
 class TestParseAdeMetadata:
 

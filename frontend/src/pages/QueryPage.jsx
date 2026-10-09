@@ -5,7 +5,7 @@
  *         model badge, reranker count, latency breakdown, source citations.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -366,41 +366,11 @@ function ModelBadge({ model, provider, tokens, costUsd }) {
 }
 
 function AnswerBox({ answer, hasModel }) {
-  // Parse [Source X] or 【Source X】 and turn into clickable badges
-  const renderAnswerWithCitations = (text) => {
-    if (!text) return null;
-    
-    // Split by [Source X] or 【Source X】
-    // The backend uses [Source 1], etc., but some LLMs output full-width brackets.
-    const parts = text.split(/([\[【]Source \d+[\]】])/g);
-    
-    return parts.map((part, i) => {
-      const match = part.match(/[\[【]Source (\d+)[\]】]/);
-      if (match) {
-        const sourceNum = match[1];
-        return (
-          <a
-            key={i}
-            href={`#source-card-${sourceNum}`}
-            className="citation-badge"
-            title={`Go to Source ${sourceNum}`}
-            onClick={(e) => {
-              e.preventDefault();
-              const el = document.getElementById(`source-card-${sourceNum}`);
-              if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                el.classList.add('highlight-pulse');
-                setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
-              }
-            }}
-          >
-            {sourceNum}
-          </a>
-        );
-      }
-      return <span key={i}>{part}</span>;
-    });
-  };
+  // Convert [Source X] or 【Source X】 into markdown link syntax [X](#source-card-X)
+  const preparedAnswer = useMemo(() => {
+    if (!answer) return '';
+    return answer.replace(/[[【]source\s*(\d+)[\]】]/gi, '[$1](#source-card-$1)');
+  }, [answer]);
 
   return (
     <div className={`answer-box ${!hasModel ? 'answer-box--placeholder' : ''}`}>
@@ -409,7 +379,44 @@ function AnswerBox({ answer, hasModel }) {
           ⏳ Retrieval only — answer generation coming in next pipeline stage
         </div>
       )}
-      <p className="answer-text">{renderAnswerWithCitations(answer)}</p>
+      <div className="answer-text answer-markdown">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            a: ({ href, children, _node, ...props }) => {
+              if (href && href.startsWith('#source-card-')) {
+                const sourceNum = href.replace('#source-card-', '');
+                return (
+                  <a
+                    href={href}
+                    className="citation-badge"
+                    title={`Go to Source ${sourceNum}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      const el = document.getElementById(`source-card-${sourceNum}`);
+                      if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        el.classList.add('highlight-pulse');
+                        setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
+                      }
+                    }}
+                    {...props}
+                  >
+                    {children}
+                  </a>
+                );
+              }
+              return (
+                <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+                  {children}
+                </a>
+              );
+            },
+          }}
+        >
+          {preparedAnswer}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }

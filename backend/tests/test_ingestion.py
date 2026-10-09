@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import time
 import uuid
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -91,6 +92,31 @@ class TestDocumentUpload:
             headers=_auth_headers(token),
         )
         assert resp.status_code == 415, resp.text
+
+    def test_upload_accepts_docx(self):
+        """Upload a valid .docx (OOXML zip) → 202 Accepted."""
+        token = _register_and_login()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("[Content_Types].xml", "<Types></Types>")
+            zf.writestr("word/document.xml", "<w:document></w:document>")
+        buf.seek(0)
+        files = {
+            "file": (
+                "policy.docx",
+                buf,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        }
+        resp = client.post(
+            "/api/v1/documents/upload",
+            files=files,
+            headers=_auth_headers(token),
+        )
+        assert resp.status_code == 202, resp.text
+        data = resp.json()
+        assert "document_id" in data
+        assert "job_id" in data
 
     def test_upload_enforces_size_limit(self):
         """Upload a file exceeding MAX_UPLOAD_SIZE_MB → 413."""

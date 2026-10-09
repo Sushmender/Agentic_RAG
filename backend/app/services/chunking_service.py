@@ -184,12 +184,14 @@ def normalize_chunks(
         text = _clean_anchor_prefix(markdown_text)
 
         # ── Filter empty / whitespace-only chunks ─────────────────────────────
-        # Strip HTML tags for whitespace check but keep original text
-        text_for_check = re.sub(r"<[^>]+>", "", text).strip()
-        if not text_for_check:
-            log.debug("Skipping empty chunk", ade_chunk_id=ade_chunk_id, chunk_type=raw_type)
-            skipped += 1
-            continue
+        # Figure and table chunks are never skipped by the empty check
+        if chunk_type not in (ChunkType.FIGURE, ChunkType.TABLE):
+            # For other types, only strip the ADE anchor tag (<a id='...'></a>) before checking if the text is empty
+            text_for_check = re.sub(r"<a\s+id=['\"][^'\"]*['\"]>\s*</a>", "", text, flags=re.IGNORECASE).strip()
+            if not text_for_check:
+                log.debug("Skipping empty chunk", ade_chunk_id=ade_chunk_id, chunk_type=raw_type)
+                skipped += 1
+                continue
 
         # ── Generate stable chunk_id ──────────────────────────────────────────
         chunk_id = _stable_chunk_id(document_id, page, bbox, chunk_type)

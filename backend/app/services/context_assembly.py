@@ -92,10 +92,14 @@ def _clean_text(raw: str) -> str:
 
     text = _TABLE_RE.sub(replace_table, raw)
 
-    # 2. Strip remaining HTML tags (anchors, inline tags, etc.)
+    # 2. Unwrap ADE chart wrappers (<:: and ::> / : chart::>) so chart content is preserved
+    text = re.sub(r'<::', '', text)
+    text = re.sub(r':?\s*[a-zA-Z ]*::>', '', text)
+
+    # 3. Strip remaining HTML tags (anchors, inline tags, etc.)
     text = _TAG_RE.sub(' ', text)
 
-    # 3. Normalise whitespace
+    # 4. Normalise whitespace
     text = _MULTI_WS.sub(' ', text)
     text = _MULTI_NL.sub('\n\n', text)
     return text.strip()

@@ -201,6 +201,9 @@ class DocumentSQLiteStore:
                      error_message, file_path, created_at, updated_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(document_id) DO UPDATE SET
+                    user_id         = excluded.user_id,
+                    filename        = excluded.filename,
+                    document_type   = excluded.document_type,
                     mime_type       = excluded.mime_type,
                     file_size_bytes = excluded.file_size_bytes,
                     status          = excluded.status,
