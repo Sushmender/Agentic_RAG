@@ -1,0 +1,13 @@
+/* ── Pipeline Visual ────────────────────────────────────────── */
+.pipeline-visual {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipeline-svg {
+  width: 200px;
+  height: 480px;
+  overflow: visible;
+}

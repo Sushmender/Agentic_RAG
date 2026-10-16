@@ -1,29 +1,52 @@
 /**
- * frontend/src/pages/LoginPage.jsx
- * User login form.
+ * src/pages/LoginPage.jsx
+ * Redesigned login — split layout:
+ *   Left: brand panel with animated pipeline SVG
+ *   Right: clean login form with show/hide password, inline validation
  */
 
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import './AuthPage.css';
+import { PasswordInput, Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { PipelineVisual } from './auth/PipelineVisual';
+import './auth/AuthPage.css';
 
 export default function LoginPage() {
   const { login } = useAuth();
-  const navigate = useNavigate();
-  const [form, setForm] = useState({ username: '', password: '' });
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const navigate   = useNavigate();
+
+  const [form, setForm]     = useState({ username: '', password: '' });
+  const [errors, setErrors] = useState({});
+  const [apiError, setApiError] = useState('');
+  const [loading, setLoading]   = useState(false);
+
+  const validate = () => {
+    const e = {};
+    if (!form.username.trim()) e.username = 'Username is required';
+    if (!form.password)        e.password = 'Password is required';
+    return e;
+  };
+
+  const handleChange = (field) => (e) => {
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
+    if (apiError) setApiError('');
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+
     setLoading(true);
+    setApiError('');
     try {
       await login(form.username, form.password);
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Login failed. Check your credentials.');
+      setApiError(err.response?.data?.detail || 'Login failed. Check your credentials.');
     } finally {
       setLoading(false);
     }
@@ -31,46 +54,70 @@ export default function LoginPage() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-header">
-          <span className="auth-logo">⚡</span>
-          <h1 className="auth-title">Multimodal RAG</h1>
-          <p className="auth-subtitle">Sign in to your account</p>
+      {/* Left brand panel */}
+      <div className="auth-brand">
+        <PipelineVisual />
+        <div className="auth-brand__text">
+          <h1 className="auth-brand__title">Multimodal RAG</h1>
+          <p className="auth-brand__sub">
+            Retrieve from text, tables, figures, and images — all in one pipeline.
+          </p>
         </div>
+      </div>
 
-        <form onSubmit={handleSubmit} className="auth-form">
-          <div className="form-group">
-            <label>Username</label>
-            <input
+      {/* Right form panel */}
+      <div className="auth-form-panel">
+        <div className="auth-card">
+          <div className="auth-card__header">
+            <h2 className="auth-card__title">Welcome back</h2>
+            <p className="auth-card__sub">Sign in to your account to continue</p>
+          </div>
+
+          <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            <Input
+              label="Username"
+              id="login-username"
               type="text"
-              value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
               placeholder="your_username"
-              required
+              value={form.username}
+              onChange={handleChange('username')}
+              error={errors.username}
               autoFocus
+              autoComplete="username"
             />
-          </div>
-          <div className="form-group">
-            <label>Password</label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
+
+            <PasswordInput
+              label="Password"
+              id="login-password"
               placeholder="••••••••"
-              required
+              value={form.password}
+              onChange={handleChange('password')}
+              error={errors.password}
+              autoComplete="current-password"
             />
-          </div>
 
-          {error && <div className="auth-error">{error}</div>}
+            {apiError && (
+              <div className="auth-api-error" role="alert">
+                {apiError}
+              </div>
+            )}
 
-          <button type="submit" className="auth-btn" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
-          </button>
-        </form>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={loading}
+              style={{ width: '100%', marginTop: '8px' }}
+            >
+              Sign In
+            </Button>
+          </form>
 
-        <p className="auth-link">
-          Don't have an account? <Link to="/register">Register</Link>
-        </p>
+          <p className="auth-switch">
+            Don't have an account?{' '}
+            <Link to="/register" className="auth-switch__link">Create one</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

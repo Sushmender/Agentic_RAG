@@ -1,0 +1,14 @@
+/* ── Skeleton ────────────────────────────────────────────────── */
+.skel {
+  display: block;
+}
+
+.skel--rect   { border-radius: var(--radius-md); }
+.skel--circle { border-radius: 50%; }
+.skel--text   { height: 14px; border-radius: var(--radius-sm); }
+
+.skel-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

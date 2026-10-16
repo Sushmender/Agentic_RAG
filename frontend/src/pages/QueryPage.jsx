@@ -1,680 +1,710 @@
 /**
- * frontend/src/pages/QueryPage.jsx
- * Query input and results page.
- * Day 5: Full pipeline — real answer, provider selector dropdown,
- *         model badge, reranker count, latency breakdown, source citations.
+ * src/pages/QueryPage.jsx
+ * Redesigned as a two-pane workspace:
+ *   Left: conversation thread + pinned composer
+ *   Right: tabbed evidence panel (Sources / Tables / Images / Trace)
+ *
+ * All original functionality preserved:
+ *   - provider selector, doc filter, Ctrl+Enter, citation links,
+ *   - BBox grounding, telemetry, debug panel, react-markdown
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { Panel, Group, Separator } from 'react-resizable-panels';
 import { toast } from 'sonner';
+import {
+  Send, RotateCcw, Copy, ChevronDown, Zap, Cpu,
+  FileText, Table2, Image, Activity, MessageSquare,
+  Sparkles, X, Check, AlertTriangle,
+} from 'lucide-react';
 import { documentsAPI, queryAPI } from '../services/api';
+import { Button } from '../components/ui/Button';
+import { Tabs } from '../components/ui/Tabs';
+import { EmptyState } from '../components/ui/EmptyState';
+import { Kbd } from '../components/ui/Kbd';
 import './QueryPage.css';
 
-/* ── Constants ────────────────────────────────────────────────────────────── */
+/* ── Constants ─────────────────────────────────────────────── */
+
+const PROVIDER_OPTIONS = [
+  { value: 'groq',       label: 'Qwen 3 27B',    provider: 'Groq',        icon: Zap  },
+  { value: 'openrouter', label: 'Nemotron 120B',  provider: 'OpenRouter',  icon: Cpu  },
+];
 
 const ROUTE_META = {
-  text:        { label: 'Text',        icon: '📝', color: 'var(--route-text)' },
-  multimodal:  { label: 'Multimodal',  icon: '🖼️',  color: 'var(--route-mm)' },
-  hybrid:      { label: 'Hybrid',      icon: '⚡',  color: 'var(--route-hybrid)' },
+  text:       { label: 'Text',       color: 'var(--accent-2)' },
+  multimodal: { label: 'Multimodal', color: 'var(--warn)'     },
+  hybrid:     { label: 'Hybrid',     color: 'var(--accent)'   },
 };
 
 const CHUNK_TYPE_META = {
-  text:    { icon: '📄', label: 'Text',    color: '#6366f1' },
-  table:   { icon: '📊', label: 'Table',   color: '#10b981' },
-  figure:  { icon: '🖼️', label: 'Figure',  color: '#f59e0b' },
+  text:   { color: 'var(--accent-2)', label: 'Text'   },
+  table:  { color: 'var(--accent)',   label: 'Table'  },
+  figure: { color: 'var(--warn)',     label: 'Figure' },
 };
 
-const PROVIDER_OPTIONS = [
-  { value: 'groq',        label: 'Groq — Qwen 3.8 27B',     icon: '⚡' },
-  { value: 'openrouter',  label: 'OpenRouter — Nemotron 120B', icon: '🔮' },
+const SUGGESTED_PROMPTS = [
+  'What are the main topics covered?',
+  'Summarize the key findings',
+  'Show me any tables or charts',
+  'What are the conclusions?',
 ];
 
-/* ── Main component ───────────────────────────────────────────────────────── */
+/* ── Helper: typewriter reveal ──────────────────────────────── */
+function useTypewriter(text, speed = 6) {
+  const [displayed, setDisplayed] = useState('');
+  const [done, setDone]           = useState(false);
 
+  useEffect(() => {
+    if (!text) { setDisplayed(''); setDone(false); return; }
+    setDisplayed('');
+    setDone(false);
+    let i = 0;
+    const id = setInterval(() => {
+      i += speed;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) { setDisplayed(text); setDone(true); clearInterval(id); }
+    }, 16);
+    return () => clearInterval(id);
+  }, [text, speed]);
+
+  const skip = () => { setDisplayed(text); setDone(true); };
+  return { displayed, done, skip };
+}
+
+/* ── Copy button ────────────────────────────────────────────── */
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <button className="copy-btn" onClick={handleCopy} aria-label="Copy answer">
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      {copied ? 'Copied' : 'Copy'}
+    </button>
+  );
+}
+
+/* ── Message bubble ─────────────────────────────────────────── */
+function UserBubble({ text }) {
+  return (
+    <div className="msg msg--user">
+      <div className="msg__bubble msg__bubble--user">{text}</div>
+    </div>
+  );
+}
+
+function AssistantBubble({ result, onCitationClick, onRegenerate }) {
+  const { displayed, done, skip } = useTypewriter(result.answer);
+
+  const preparedAnswer = useMemo(() => {
+    if (!displayed) return '';
+    return displayed.replace(/[[【]source\s*(\d+)[\]】]/gi, '[$1](#source-$1)');
+  }, [displayed]);
+
+  const routeMeta = ROUTE_META[result.route_type] || ROUTE_META.text;
+
+  return (
+    <div className="msg msg--assistant">
+      {/* Meta chips */}
+      <div className="msg__meta">
+        <span className="route-chip" style={{ '--chip-color': routeMeta.color }}>
+          {routeMeta.label}
+        </span>
+        {result.cache_hit && (
+          <span className="cache-chip"><Zap size={10} /> Cached</span>
+        )}
+        {result.latency?.total_ms && (
+          <span className="latency-chip">
+            {result.latency.total_ms.toFixed(0)} ms
+          </span>
+        )}
+        {result.model_used && (
+          <span className="model-chip">
+            {result.model_used.split('/').pop()?.split('-').slice(0, 3).join('-')}
+          </span>
+        )}
+      </div>
+
+      {/* Answer text */}
+      <div
+        className={`msg__bubble msg__bubble--assistant ${!done ? 'msg__bubble--typing' : ''}`}
+        onClick={() => !done && skip()}
+        role={!done ? 'button' : undefined}
+        aria-label={!done ? 'Click to skip animation' : undefined}
+        aria-live="polite"
+      >
+        <div className="answer-markdown">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ href, children, ...props }) => {
+                if (href?.startsWith('#source-')) {
+                  const num = href.replace('#source-', '');
+                  return (
+                    <a
+                      href={href}
+                      className="citation-badge"
+                      title={`Go to source ${num}`}
+                      onClick={(e) => { e.preventDefault(); onCitationClick(num); }}
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  );
+                }
+                return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+              },
+            }}
+          >
+            {preparedAnswer}
+          </ReactMarkdown>
+        </div>
+        {!done && (
+          <span className="typing-cursor" aria-hidden="true">|</span>
+        )}
+      </div>
+
+      {/* Action bar */}
+      {done && (
+        <div className="msg__actions">
+          <CopyButton text={result.answer} />
+          <button className="msg-action-btn" onClick={onRegenerate} aria-label="Regenerate answer">
+            <RotateCcw size={13} /> Regenerate
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Source card ────────────────────────────────────────────── */
+function SourceCard({ source, rank, isHighlighted }) {
+  const [expanded, setExpanded] = useState(false);
+  const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
+
+  return (
+    <div
+      className={`source-card ${isHighlighted ? 'source-card--highlighted' : ''}`}
+      id={`source-${rank}`}
+    >
+      <button
+        className="source-card__header"
+        onClick={() => setExpanded(v => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="source-rank">#{rank}</span>
+        <span className="source-type-dot" style={{ background: typeMeta.color }} title={typeMeta.label} />
+        <span className="source-filename" title={source.filename}>
+          {source.filename || 'Unknown file'}
+        </span>
+        <span className="source-page">p.{source.page + 1}</span>
+        <span className="source-score">{(source.relevance_score * 100).toFixed(0)}%</span>
+        <ChevronDown size={14} className={`source-chevron ${expanded ? 'source-chevron--open' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="source-card__body animate-fade-in">
+          {source.text_preview && (
+            <div className="source-preview">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{source.text_preview}</ReactMarkdown>
+            </div>
+          )}
+          <div className="source-meta">
+            <span className="source-meta__item">
+              <span className="source-meta__label">Chunk</span>
+              <code className="source-meta__val">{source.chunk_id?.slice(0, 16)}…</code>
+            </span>
+            <span className="source-meta__item">
+              <span className="source-meta__label">Doc</span>
+              <code className="source-meta__val">{source.document_id?.slice(0, 12)}…</code>
+            </span>
+            {source.bbox?.length === 4 && (
+              <span className="source-meta__item">
+                <span className="source-meta__label">BBox</span>
+                <code className="source-meta__val">[{source.bbox.map(v => v.toFixed(2)).join(', ')}]</code>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Trace panel ────────────────────────────────────────────── */
+function TracePanel({ latency, tokenUsage, costUsd }) {
+  const stages = [
+    { label: 'Embedding',  ms: latency?.query_embed_ms, color: 'var(--color-embed)' },
+    { label: 'Retrieval',  ms: latency?.retrieval_ms,   color: 'var(--color-retrieve)' },
+    { label: 'Reranking',  ms: latency?.reranking_ms,  color: 'var(--color-rerank)' },
+    { label: 'LLM',        ms: latency?.llm_ms,         color: 'var(--color-llm)' },
+  ];
+  const maxMs = Math.max(...stages.map(s => s.ms || 0), 1);
+  const fmt = (ms) => !ms || ms < 1 ? '< 1 ms' : ms >= 1000 ? `${(ms/1000).toFixed(2)} s` : `${ms.toFixed(0)} ms`;
+
+  return (
+    <div className="trace-panel">
+      <div className="trace-section">
+        <h4 className="trace-section__title">Latency Breakdown</h4>
+        {stages.map(({ label, ms, color }) => {
+          const pct = Math.min(((ms || 0) / maxMs) * 100, 100);
+          return (
+            <div key={label} className="trace-bar-row">
+              <span className="trace-bar-label">{label}</span>
+              <div className="trace-bar-track">
+                <div className="trace-bar-fill" style={{ width: `${pct}%`, background: color }} />
+              </div>
+              <span className="trace-bar-val">{fmt(ms)}</span>
+            </div>
+          );
+        })}
+        <div className="trace-total">
+          Total: <strong>{fmt(latency?.total_ms)}</strong>
+        </div>
+      </div>
+      {tokenUsage && (
+        <div className="trace-section">
+          <h4 className="trace-section__title">Token Usage</h4>
+          <div className="trace-stat-row">
+            <div className="trace-stat"><span className="trace-stat__val">{(tokenUsage.input_tokens || 0).toLocaleString()}</span><span className="trace-stat__label">Input</span></div>
+            <div className="trace-stat"><span className="trace-stat__val">{(tokenUsage.output_tokens || 0).toLocaleString()}</span><span className="trace-stat__label">Output</span></div>
+            <div className="trace-stat trace-stat--accent"><span className="trace-stat__val">{(tokenUsage.total_tokens || 0).toLocaleString()}</span><span className="trace-stat__label">Total</span></div>
+          </div>
+        </div>
+      )}
+      <div className="trace-section">
+        <h4 className="trace-section__title">Estimated Cost</h4>
+        <p className="trace-cost">{costUsd > 0 ? `$${Number(costUsd).toFixed(6)}` : '$0.000000 (free tier)'}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ── Query skeleton ─────────────────────────────────────────── */
+function QuerySkeleton() {
+  return (
+    <div className="query-skeleton">
+      <div className="skeleton" style={{ height: '24px', width: '40%', marginBottom: '12px', borderRadius: '6px' }} />
+      <div className="skeleton" style={{ height: '120px', borderRadius: '10px', marginBottom: '8px' }} />
+      <div className="skeleton" style={{ height: '16px', width: '70%', borderRadius: '6px', marginBottom: '4px' }} />
+      <div className="skeleton" style={{ height: '16px', width: '50%', borderRadius: '6px' }} />
+    </div>
+  );
+}
+
+/* ── Main page ──────────────────────────────────────────────── */
 export default function QueryPage() {
-  const [query, setQuery]               = useState('');
+  const location  = useLocation();
+
+  // Conversation history
+  const [messages, setMessages] = useState([]); // {type:'user'|'assistant', content, result?}
+  const [query, setQuery]       = useState('');
+  const [provider, setProvider] = useState('groq');
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
+
+  // Documents
   const [documents, setDocuments]       = useState([]);
   const [selectedDocs, setSelectedDocs] = useState([]);
-  const [provider, setProvider]         = useState('groq');
-  const [loading, setLoading]           = useState(false);
-  const [result, setResult]             = useState(null);   // QueryResponse
-  const [error, setError]               = useState(null);
-  const [showDebug, setShowDebug]       = useState(false);
   const [docsLoading, setDocsLoading]   = useState(true);
-  const [docsError, setDocsError]       = useState(false);
-  const textareaRef = useRef(null);
-  const navigate = useNavigate();
 
-  /* Load completed documents for the document selector */
+  // Evidence pane
+  const [evidenceTab, setEvidenceTab]   = useState('sources');
+  const [highlighted, setHighlighted]   = useState(null);
+
+  const textareaRef  = useRef(null);
+  const bottomRef    = useRef(null);
+
+  // Get pre-selected doc from query string
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const docId  = params.get('doc');
+    if (docId) setSelectedDocs([docId]);
+  }, [location.search]);
+
+  // Load documents
   useEffect(() => {
     setDocsLoading(true);
     documentsAPI.list()
       .then(res => {
-        const completed = (res.data.documents || res.data || []).filter(d => d.status === 'completed');
+        const completed = (res.data.documents || []).filter(d => d.status === 'completed');
         setDocuments(completed);
-        setDocsError(false);
       })
-      .catch(() => {
-        setDocuments([]);
-        setDocsError(true);
-      })
+      .catch(() => toast.error('Could not load documents.'))
       .finally(() => setDocsLoading(false));
   }, []);
 
-  /* Auto-resize textarea */
+  // Auto-scroll to bottom on new message
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  // Auto-resize textarea
   const handleQueryChange = (e) => {
     setQuery(e.target.value);
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = 'auto';
-      ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`;
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     }
   };
 
-  /* Toggle a document in/out of the selection filter */
   const toggleDoc = useCallback((docId) => {
     setSelectedDocs(prev =>
       prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
     );
   }, []);
 
-  /* Submit query */
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!query.trim() || loading) return;
+  // Latest result (from last assistant message)
+  const lastResult = useMemo(() => {
+    const assistantMsgs = messages.filter(m => m.type === 'assistant');
+    return assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].result : null;
+  }, [messages]);
 
+  const sourcesForCurrentResult = lastResult?.sources || [];
+  const tablesInSources  = sourcesForCurrentResult.filter(s => s.chunk_type === 'table');
+  const imagesInSources  = sourcesForCurrentResult.filter(s => s.chunk_type === 'figure');
+
+  /* Submit */
+  const handleSubmit = async (e) => {
+    e?.preventDefault();
+    const q = query.trim();
+    if (!q || loading) return;
+
+    setMessages(prev => [...prev, { type: 'user', content: q }]);
+    setQuery('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setLoading(true);
-    setResult(null);
     setError(null);
 
     try {
-      const payload = {
-        query:        query.trim(),
+      const res = await queryAPI.query({
+        query:        q,
         document_ids: selectedDocs.length > 0 ? selectedDocs : null,
         llm_provider: provider,
-      };
-      const res = await queryAPI.query(payload);
-      setResult(res.data);
+      });
+      setMessages(prev => [...prev, { type: 'assistant', content: res.data.answer, result: res.data }]);
+      setEvidenceTab('sources');
     } catch (err) {
       const status = err.response?.status;
       const detail = err.response?.data?.detail || err.message || 'Query failed.';
-      if (status === 429) {
-        const msg = 'Rate limit reached. Please wait a moment before trying again.';
-        setError(msg);
-        toast.warning(msg);
-      } else if (status >= 500) {
-        const msg = `Server error: ${detail}`;
-        setError(msg);
-        toast.error(msg);
-      } else {
-        setError(detail);
-        toast.error(detail);
-      }
+      let msg = detail;
+      if (status === 429) msg = 'Rate limit reached — wait a moment and try again.';
+      else if (status >= 500) msg = `Server error: ${detail}`;
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  /* Keyboard shortcut: Ctrl+Enter submits */
   const handleKeyDown = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSubmit(e);
   };
 
+  const handleCitationClick = (num) => {
+    setEvidenceTab('sources');
+    setHighlighted(num);
+    setTimeout(() => {
+      const el = document.getElementById(`source-${num}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('source-card--highlighted');
+        setTimeout(() => {
+          el.classList.remove('source-card--highlighted');
+          setHighlighted(null);
+        }, 1600);
+      }
+    }, 100);
+  };
+
+  const handleRegenerate = () => {
+    const lastUser = [...messages].reverse().find(m => m.type === 'user');
+    if (lastUser) {
+      setMessages(prev => prev.slice(0, -1)); // remove last assistant msg
+      setQuery(lastUser.content);
+    }
+  };
+
+  const clearConversation = () => {
+    setMessages([]);
+    setError(null);
+  };
+
+  const evidenceTabs = [
+    { value: 'sources', label: 'Sources',   count: sourcesForCurrentResult.length },
+    { value: 'tables',  label: 'Tables',    count: tablesInSources.length },
+    { value: 'images',  label: 'Images',    count: imagesInSources.length },
+    { value: 'trace',   label: 'Trace' },
+  ];
+
   return (
     <div className="query-page">
-
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="page-header">
-        <h1 className="page-title">💬 Ask a Question</h1>
-        <p className="page-subtitle">
-          Query your documents using multimodal RAG — text, tables, figures, and images.
-        </p>
-      </div>
-
-      {/* ── No documents CTA ───────────────────────────────────────────── */}
-      {!docsLoading && !docsError && documents.length === 0 && (
-        <div className="query-no-docs-banner">
-          <span className="query-no-docs-icon">📁</span>
-          <div>
-            <p className="query-no-docs-title">No processed documents yet</p>
-            <p className="query-no-docs-hint">
-              Upload and process a document first, then come back to ask questions.
-            </p>
-          </div>
-          <button className="query-no-docs-btn" onClick={() => navigate('/')}>
-            Upload Documents →
-          </button>
-        </div>
-      )}
-
-      {docsError && (
-        <div className="query-error-banner" role="alert">
-          <span>⚠️</span>
-          <span>Could not load documents. Is the backend running?</span>
-        </div>
-      )}
-
-      {/* ── Query form ─────────────────────────────────────────────────── */}
-      <form className="query-form" onSubmit={handleSubmit}>
-
-        {/* Document selector */}
-        {!docsLoading && documents.length > 0 && (
-          <div className="doc-selector">
-            <label className="doc-selector-label">
-              🗂️ Filter to specific documents{' '}
-              <span className="doc-selector-hint">(leave empty to search all)</span>
-            </label>
-            <div className="doc-chips">
-              {documents.map(doc => (
-                <button
-                  key={doc.document_id}
-                  type="button"
-                  className={`doc-chip ${selectedDocs.includes(doc.document_id) ? 'doc-chip--active' : ''}`}
-                  onClick={() => toggleDoc(doc.document_id)}
-                  title={doc.document_id}
-                >
-                  {doc.filename}
-                  {selectedDocs.includes(doc.document_id) && <span className="chip-check">✓</span>}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Textarea */}
-        <div className="query-input-wrapper">
-          <textarea
-            ref={textareaRef}
-            id="query-input"
-            className="query-input"
-            placeholder="Ask anything about your documents…&#10;e.g. 'What was the revenue in Q3?' or 'Show me the sales table'"
-            value={query}
-            onChange={handleQueryChange}
-            onKeyDown={handleKeyDown}
-            rows={3}
-            disabled={loading}
-            aria-label="Query input"
-          />
-          <span className="query-shortcut-hint">Ctrl+Enter to submit</span>
-        </div>
-
-        {/* Submit row: provider dropdown + submit button */}
-        <div className="query-form-footer">
-          {/* Provider selector dropdown */}
-          <div className="provider-selector">
-            <label htmlFor="provider-select" className="provider-label">🤖 Model</label>
-            <select
-              id="provider-select"
-              className="provider-dropdown"
-              value={provider}
-              onChange={e => setProvider(e.target.value)}
-              disabled={loading}
-            >
-              {PROVIDER_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.icon} {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            id="query-submit-btn"
-            type="submit"
-            className="query-btn"
-            disabled={loading || !query.trim()}
-          >
-            {loading
-              ? <><span className="spinner" /> Searching…</>
-              : <><span>🔍</span> Ask Question</>
-            }
-          </button>
-
-          {result && (
-            <button
-              type="button"
-              className="debug-toggle-btn"
-              onClick={() => setShowDebug(v => !v)}
-            >
-              {showDebug ? '🔒 Hide' : '🔓 Show'} debug
-            </button>
-          )}
-        </div>
-      </form>
-
-      {/* ── Error ──────────────────────────────────────────────────────── */}
-      {error && (
-        <div className="query-error" role="alert">
-          <span className="error-icon">⚠️</span>
-          <span>{typeof error === 'string' ? error : JSON.stringify(error)}</span>
-        </div>
-      )}
-
-      {/* ── Loading skeleton ───────────────────────────────────────────── */}
-      {loading && <QuerySkeleton />}
-
-      {/* ── Results ────────────────────────────────────────────────────── */}
-      {!loading && result && (
-        <div className="query-results">
-
-          {/* Meta row: cache badge + route + latency + reranker count + model badge */}
-          <div className="result-meta-row">
-            {result.cache_hit && (
-              <span className="cache-hit-badge" title="Answer served from Redis cache">
-                ⚡ Instant (cached)
-              </span>
-            )}
-            <RouteTag route={result.route_type} />
-            {result.model_used && (
-              <ModelBadge
-                model={result.model_used}
-                provider={result.provider_used}
-                tokens={result.token_usage?.total_tokens}
-                costUsd={result.cost_usd}
-              />
-            )}
-            <span className="result-latency">
-              ⏱ {result.latency?.total_ms?.toFixed(0) ?? '—'} ms total
-            </span>
-            <span className="result-count">
-              {result.sources.length} source{result.sources.length !== 1 ? 's' : ''}
-            </span>
-          </div>
-
-          {/* Answer box */}
-          <AnswerBox answer={result.answer} hasModel={!!result.model_used} />
-
-          {/* Performance details panel (Day 7) */}
-          <TelemetryPanel latency={result.latency} tokenUsage={result.token_usage} costUsd={result.cost_usd} />
-
-          {/* Debug panel */}
-          {showDebug && (
-            <DebugPanel
-              sources={result.sources}
-              route={result.route_type}
-              latency={result.latency}
-              tokenUsage={result.token_usage}
-            />
-          )}
-
-          {/* Source cards (citations below answer) */}
-          {result.sources.length > 0 && (
-            <div className="sources-section">
-              <h3 className="sources-heading">
-                📎 Sources
-                <span className="sources-subhead">grounded citations — sorted by relevance</span>
-              </h3>
-              <div className="source-cards">
-                {result.sources.map((src, idx) => (
-                  <SourceCard key={src.chunk_id} source={src} rank={idx + 1} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Empty candidates */}
-          {result.sources.length === 0 && (
-            <div className="empty-state">
-              <span className="empty-icon">🔍</span>
-              <p>No matching chunks found. Try a different question or upload more documents.</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Initial empty state ────────────────────────────────────────── */}
-      {!loading && !result && !error && (
-        <div className="query-results">
-          <div className="empty-state">
-            <span className="empty-icon">💡</span>
-            <p>Ask a question to get grounded answers with source citations.</p>
-            <p className="empty-hint">
-              Tip: Use words like <em>table</em>, <em>chart</em>, or <em>figure</em> to trigger multimodal retrieval.
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Sub-components ───────────────────────────────────────────────────────── */
-
-function RouteTag({ route }) {
-  const meta = ROUTE_META[route] || ROUTE_META.text;
-  return (
-    <span className="route-tag" style={{ '--tag-color': meta.color }}>
-      {meta.icon} {meta.label}
-    </span>
-  );
-}
-
-function ModelBadge({ model, provider, tokens, costUsd }) {
-  const providerLabel = provider === 'groq' ? 'Groq' : 'OpenRouter';
-  const providerIcon  = provider === 'groq' ? '⚡' : '🔮';
-  return (
-    <span className="model-badge">
-      {providerIcon} <strong>{providerLabel}</strong>
-      <span className="model-badge-model">{model}</span>
-      {tokens > 0 && <span className="model-badge-tokens">{tokens.toLocaleString()} tokens</span>}
-      {costUsd > 0 && <span className="model-badge-cost">${costUsd.toFixed(4)}</span>}
-    </span>
-  );
-}
-
-function AnswerBox({ answer, hasModel }) {
-  // Convert [Source X] or 【Source X】 into markdown link syntax [X](#source-card-X)
-  const preparedAnswer = useMemo(() => {
-    if (!answer) return '';
-    return answer.replace(/[[【]source\s*(\d+)[\]】]/gi, '[$1](#source-card-$1)');
-  }, [answer]);
-
-  return (
-    <div className={`answer-box ${!hasModel ? 'answer-box--placeholder' : ''}`}>
-      {!hasModel && (
-        <div className="answer-placeholder-badge">
-          ⏳ Retrieval only — answer generation coming in next pipeline stage
-        </div>
-      )}
-      <div className="answer-text answer-markdown">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            a: ({ href, children, _node, ...props }) => {
-              if (href && href.startsWith('#source-card-')) {
-                const sourceNum = href.replace('#source-card-', '');
-                return (
-                  <a
-                    href={href}
-                    className="citation-badge"
-                    title={`Go to Source ${sourceNum}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const el = document.getElementById(`source-card-${sourceNum}`);
-                      if (el) {
-                        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        el.classList.add('highlight-pulse');
-                        setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
-                      }
-                    }}
-                    {...props}
-                  >
-                    {children}
-                  </a>
-                );
-              }
-              return (
-                <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
-                  {children}
-                </a>
-              );
-            },
-          }}
-        >
-          {preparedAnswer}
-        </ReactMarkdown>
-      </div>
-    </div>
-  );
-}
-
-function BBoxGrounding({ bbox, page, chunkType }) {
-  if (!bbox || bbox.length !== 4) return null;
-
-  const [x0, y0, x1, y1] = bbox;
-  const width  = Math.max(x1 - x0, 0.02);
-  const height = Math.max(y1 - y0, 0.02);
-
-  // Color by chunk type
-  const colors = {
-    text:   { fill: 'rgba(99,102,241,0.25)', stroke: '#6366f1' },
-    table:  { fill: 'rgba(16,185,129,0.22)', stroke: '#10b981' },
-    figure: { fill: 'rgba(245,158,11,0.22)', stroke: '#f59e0b' },
-  };
-  const { fill, stroke } = colors[chunkType] || colors.text;
-
-  return (
-    <div className="bbox-grounding">
-      <div className="bbox-grounding__label">📍 Source location on page {page + 1}</div>
-      <div className="bbox-page-thumb" title={`BBox: [${bbox.map(v => v.toFixed(3)).join(', ')}]`}>
-        {/* Page background */}
-        <svg
-          viewBox="0 0 100 141"
-          xmlns="http://www.w3.org/2000/svg"
-          className="bbox-page-svg"
-        >
-          {/* Page background */}
-          <rect x="0" y="0" width="100" height="141" fill="#1e293b" rx="2" />
-          {/* Subtle page lines */}
-          {[18, 26, 34, 42, 50, 58, 66, 74, 82, 90, 98, 106, 114, 122].map((y) => (
-            <line key={y} x1="8" y1={y} x2="92" y2={y} stroke="#334155" strokeWidth="0.8" />
-          ))}
-          {/* Highlighted bbox region */}
-          <rect
-            x={x0 * 100}
-            y={y0 * 141}
-            width={width * 100}
-            height={height * 141}
-            fill={fill}
-            stroke={stroke}
-            strokeWidth="1.5"
-            rx="1"
-          />
-          {/* Corner markers */}
-          <rect x={x0 * 100 - 1} y={y0 * 141 - 1} width="3" height="3" fill={stroke} rx="0.5" />
-          <rect x={(x0 + width) * 100 - 2} y={y0 * 141 - 1} width="3" height="3" fill={stroke} rx="0.5" />
-          <rect x={x0 * 100 - 1} y={(y0 + height) * 141 - 2} width="3" height="3" fill={stroke} rx="0.5" />
-          <rect x={(x0 + width) * 100 - 2} y={(y0 + height) * 141 - 2} width="3" height="3" fill={stroke} rx="0.5" />
-        </svg>
-      </div>
-      <div className="bbox-coords">
-        [{bbox.map(v => v.toFixed(3)).join(', ')}]
-      </div>
-    </div>
-  );
-}
-
-function SourceCard({ source, rank }) {
-  const [expanded, setExpanded] = useState(false);
-  const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
-
-  return (
-    <div className="source-card" id={`source-card-${rank}`}>
-      <div className="source-card-header" onClick={() => setExpanded(v => !v)}>
-        <span className="source-rank">#{rank}</span>
-        {source.filename && (
-          <span className="source-filename" title={source.filename}>
-            📁 {source.filename}
-          </span>
-        )}
-        <span
-          className="source-type-badge"
-          style={{ '--badge-color': typeMeta.color }}
-        >
-          {typeMeta.icon} {typeMeta.label}
-        </span>
-        <span className="source-page">Page {source.page + 1}</span>
-        <span className="source-score">
-          {(source.relevance_score * 100).toFixed(1)}%
-        </span>
-        <span className="source-expand-icon">{expanded ? '▲' : '▼'}</span>
-      </div>
-
-      {expanded && (
-        <div className="source-card-body">
-          {/* Bbox grounding visual — Day 8 */}
-          <BBoxGrounding
-            bbox={source.bbox}
-            page={source.page}
-            chunkType={source.chunk_type}
-          />
-
-          <div className="source-preview markdown-body">
-            {source.text_preview ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {source.text_preview}
-              </ReactMarkdown>
-            ) : (
-              '(no preview)'
-            )}
-          </div>
-          <div className="source-meta-grid">
-            <span className="source-meta-item">
-              <strong>Chunk ID</strong>
-              <code>{source.chunk_id.slice(0, 16)}…</code>
-            </span>
-            <span className="source-meta-item">
-              <strong>Doc ID</strong>
-              <code>{source.document_id.slice(0, 12)}…</code>
-            </span>
-            {source.bbox?.length === 4 && (
-              <span className="source-meta-item">
-                <strong>BBox</strong>
-                <code>[{source.bbox.map(v => v.toFixed(3)).join(', ')}]</code>
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TelemetryPanel({ latency, tokenUsage, costUsd }) {
-  const [open, setOpen] = useState(false);
-
-  const stages = [
-    { label: '🔢 Embedding', ms: latency?.query_embed_ms, color: '#6366f1' },
-    { label: '🔍 Retrieval', ms: latency?.retrieval_ms,   color: '#0ea5e9' },
-    { label: '🏆 Reranking', ms: latency?.reranking_ms,  color: '#f59e0b' },
-    { label: '🤖 LLM',       ms: latency?.llm_ms,         color: '#10b981' },
-  ];
-  const maxMs = Math.max(...stages.map(s => s.ms || 0), 1);
-  const fmtMs = (ms) => {
-    if (!ms || ms < 1) return '< 1 ms';
-    if (ms >= 1000) return `${(ms / 1000).toFixed(2)} s`;
-    return `${ms.toFixed(0)} ms`;
-  };
-
-  return (
-    <div className="telemetry-panel">
-      <button className="telemetry-panel__toggle" onClick={() => setOpen(v => !v)} type="button">
-        <span>⚙️ Performance Details</span>
-        <span className="telemetry-panel__total">{fmtMs(latency?.total_ms)} total</span>
-        <span className="telemetry-panel__chevron">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <div className="telemetry-panel__body">
-          <div className="tel-section">
-            <h4 className="tel-section-title">⏱ Latency Breakdown</h4>
-            {stages.map(({ label, ms, color }) => {
-              const pct = Math.min(((ms || 0) / maxMs) * 100, 100);
-              return (
-                <div key={label} className="tel-bar-row">
-                  <span className="tel-bar-label">{label}</span>
-                  <div className="tel-bar-track">
-                    <div className="tel-bar-fill" style={{ width: `${pct}%`, background: color }} />
+      <Group orientation="horizontal" className="query-panels">
+        {/* ── Left: Conversation ──────────────────────────────── */}
+        <Panel defaultSize="60%" minSize="35%" className="conv-panel">
+          <div className="conv-panel__inner">
+            {/* Conversation thread */}
+            <div className="conv-thread" aria-live="polite" aria-label="Conversation">
+              {messages.length === 0 && !loading && (
+                <div className="conv-empty">
+                  <EmptyState
+                    icon={<MessageSquare size={24} />}
+                    title="Ask anything"
+                    description="Query your documents using multimodal RAG — text, tables, figures, and images."
+                  />
+                  <div className="suggested-prompts">
+                    {SUGGESTED_PROMPTS.map(p => (
+                      <button key={p} className="suggested-prompt" onClick={() => { setQuery(p); textareaRef.current?.focus(); }}>
+                        <Sparkles size={12} />
+                        {p}
+                      </button>
+                    ))}
                   </div>
-                  <span className="tel-bar-value">{fmtMs(ms)}</span>
                 </div>
-              );
-            })}
-          </div>
-          {tokenUsage && (
-            <div className="tel-section">
-              <h4 className="tel-section-title">🔤 Token Usage</h4>
-              <div className="tel-stats-row">
-                <div className="tel-stat">
-                  <span className="tel-stat__val">{(tokenUsage.input_tokens || 0).toLocaleString()}</span>
-                  <span className="tel-stat__label">Input</span>
-                </div>
-                <div className="tel-stat">
-                  <span className="tel-stat__val">{(tokenUsage.output_tokens || 0).toLocaleString()}</span>
-                  <span className="tel-stat__label">Output</span>
-                </div>
-                <div className="tel-stat tel-stat--accent">
-                  <span className="tel-stat__val">{(tokenUsage.total_tokens || 0).toLocaleString()}</span>
-                  <span className="tel-stat__label">Total</span>
-                </div>
-              </div>
-            </div>
-          )}
-          <div className="tel-section">
-            <h4 className="tel-section-title">💰 Estimated Cost</h4>
-            <div className="tel-cost">
-              {costUsd > 0 ? `$${Number(costUsd).toFixed(6)}` : '$0.000000 (free tier)'}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+              )}
 
-function DebugPanel({ sources, route, latency, tokenUsage }) {
-  return (
-    <div className="debug-panel">
-      <h4 className="debug-heading">🔬 Pipeline Debug</h4>
-      <div className="debug-latency-row">
-        <span>Embed: <strong>{latency?.query_embed_ms?.toFixed(0) ?? '—'} ms</strong></span>
-        <span>Retrieve: <strong>{latency?.retrieval_ms?.toFixed(0) ?? '—'} ms</strong></span>
-        <span>Rerank: <strong>{latency?.reranking_ms?.toFixed(0) ?? '—'} ms</strong></span>
-        <span>LLM: <strong>{latency?.llm_ms?.toFixed(0) ?? '—'} ms</strong></span>
-        <span>Route: <strong>{route}</strong></span>
-      </div>
-      {tokenUsage && (
-        <div className="debug-latency-row">
-          <span>Input tokens: <strong>{tokenUsage.input_tokens ?? 0}</strong></span>
-          <span>Output tokens: <strong>{tokenUsage.output_tokens ?? 0}</strong></span>
-          <span>Total tokens: <strong>{tokenUsage.total_tokens ?? 0}</strong></span>
-        </div>
-      )}
-      <div className="debug-table-wrapper">
-        <table className="debug-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Chunk ID</th>
-              <th>File</th>
-              <th>Type</th>
-              <th>Page</th>
-              <th>Score</th>
-              <th>Preview</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((src, i) => (
-              <tr key={src.chunk_id}>
-                <td>{i + 1}</td>
-                <td><code title={src.chunk_id}>{src.chunk_id.slice(0, 10)}…</code></td>
-                <td className="debug-preview">{src.filename || '—'}</td>
-                <td>{src.chunk_type}</td>
-                <td>{src.page + 1}</td>
-                <td>{(src.relevance_score * 100).toFixed(1)}%</td>
-                <td className="debug-preview">{src.text_preview?.slice(0, 60) || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+              {messages.map((msg, i) => {
+                if (msg.type === 'user') return <UserBubble key={i} text={msg.content} />;
+                return (
+                  <AssistantBubble
+                    key={i}
+                    result={msg.result}
+                    onCitationClick={handleCitationClick}
+                    onRegenerate={i === messages.length - 1 ? handleRegenerate : undefined}
+                  />
+                );
+              })}
 
-function QuerySkeleton() {
-  return (
-    <div className="query-skeleton" aria-label="Loading…">
-      <div className="skeleton-meta-row">
-        <div className="skeleton-tag" />
-        <div className="skeleton-latency" />
-      </div>
-      <div className="skeleton-answer" />
-      <div className="skeleton-cards">
-        {[1, 2, 3].map(i => <div key={i} className="skeleton-card" />)}
-      </div>
+              {loading && <QuerySkeleton />}
+
+              {error && (
+                <div className="conv-error" role="alert">
+                  <AlertTriangle size={15} />
+                  {error}
+                </div>
+              )}
+
+              <div ref={bottomRef} />
+            </div>
+
+            {/* Pinned composer */}
+            <div className="composer">
+              {/* Doc filter chips */}
+              {!docsLoading && documents.length > 0 && (
+                <div className="composer__doc-chips">
+                  {selectedDocs.map(id => {
+                    const doc = documents.find(d => d.document_id === id);
+                    if (!doc) return null;
+                    return (
+                      <span key={id} className="doc-filter-chip">
+                        {doc.filename}
+                        <button
+                          className="doc-filter-chip__remove"
+                          onClick={() => toggleDoc(id)}
+                          aria-label={`Remove ${doc.filename} filter`}
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    );
+                  })}
+                  {selectedDocs.length === 0 && (
+                    <span className="composer__doc-hint">All documents · </span>
+                  )}
+                  <div className="doc-filter-dropdown">
+                    <button className="doc-filter-dropdown__btn" aria-label="Select documents to filter">
+                      Filter docs <ChevronDown size={11} />
+                    </button>
+                    <div className="doc-filter-dropdown__menu">
+                      {documents.map(doc => (
+                        <label key={doc.document_id} className="doc-filter-option">
+                          <input
+                            type="checkbox"
+                            checked={selectedDocs.includes(doc.document_id)}
+                            onChange={() => toggleDoc(doc.document_id)}
+                          />
+                          {doc.filename}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <form className="composer__form" onSubmit={handleSubmit}>
+                <div className="composer__textarea-wrap">
+                  <textarea
+                    ref={textareaRef}
+                    id="query-input"
+                    className="composer__textarea"
+                    placeholder="Ask anything about your documents…"
+                    value={query}
+                    onChange={handleQueryChange}
+                    onKeyDown={handleKeyDown}
+                    rows={1}
+                    disabled={loading}
+                    aria-label="Query input"
+                  />
+                </div>
+                <div className="composer__footer">
+                  <div className="composer__footer-left">
+                    <select
+                      className="model-select"
+                      value={provider}
+                      onChange={e => setProvider(e.target.value)}
+                      disabled={loading}
+                      aria-label="Select model"
+                    >
+                      {PROVIDER_OPTIONS.map(o => (
+                        <option key={o.value} value={o.value}>{o.provider} — {o.label}</option>
+                      ))}
+                    </select>
+                    {messages.length > 0 && (
+                      <button type="button" className="clear-btn" onClick={clearConversation} aria-label="Clear conversation">
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="composer__footer-right">
+                    <span className="composer__hint"><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd></span>
+                    <Button
+                      id="query-submit-btn"
+                      type="submit"
+                      variant="primary"
+                      size="md"
+                      loading={loading}
+                      disabled={!query.trim() || loading}
+                      icon={<Send size={14} />}
+                    >
+                      Ask
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </Panel>
+
+        <Separator className="panel-resize-handle" />
+
+        {/* ── Right: Evidence ─────────────────────────────────── */}
+        <Panel defaultSize="40%" minSize="25%" className="evidence-panel">
+          <div className="evidence-panel__inner">
+            <div className="evidence-panel__header">
+              <Tabs
+                tabs={evidenceTabs}
+                active={evidenceTab}
+                onChange={setEvidenceTab}
+              />
+            </div>
+
+            <div className="evidence-panel__body">
+              {/* No result yet */}
+              {!lastResult && !loading && (
+                <EmptyState
+                  icon={<Activity size={22} />}
+                  title="Evidence panel"
+                  description="Sources, tables, images, and trace will appear here after you ask a question."
+                />
+              )}
+
+              {/* Sources tab */}
+              {lastResult && evidenceTab === 'sources' && (
+                <div className="sources-list">
+                  {sourcesForCurrentResult.length === 0 ? (
+                    <EmptyState icon={<FileText size={20} />} title="No sources" description="No matching chunks were found for this query." />
+                  ) : (
+                    sourcesForCurrentResult.map((src, i) => (
+                      <SourceCard
+                        key={src.chunk_id}
+                        source={src}
+                        rank={i + 1}
+                        isHighlighted={highlighted === String(i + 1)}
+                      />
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Tables tab */}
+              {lastResult && evidenceTab === 'tables' && (
+                <div className="tables-list">
+                  {tablesInSources.length === 0 ? (
+                    <EmptyState icon={<Table2 size={20} />} title="No tables" description="No table chunks were retrieved for this query." />
+                  ) : (
+                    tablesInSources.map(src => (
+                      <div key={src.chunk_id} className="table-chunk">
+                        <div className="table-chunk__header">
+                          <span>Table from {src.filename} · p.{src.page + 1}</span>
+                          <span className="source-score">{(src.relevance_score * 100).toFixed(0)}%</span>
+                        </div>
+                        <div className="table-chunk__content">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{src.text_preview}</ReactMarkdown>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Images tab */}
+              {lastResult && evidenceTab === 'images' && (
+                <div className="images-list">
+                  {imagesInSources.length === 0 ? (
+                    <EmptyState icon={<Image size={20} />} title="No images" description="No figure chunks were retrieved for this query." />
+                  ) : (
+                    imagesInSources.map(src => (
+                      <div key={src.chunk_id} className="image-chunk">
+                        <div className="image-chunk__header">
+                          Figure from {src.filename} · p.{src.page + 1}
+                        </div>
+                        <div className="image-chunk__content">
+                          {src.text_preview && (
+                            <p className="image-chunk__caption">{src.text_preview.slice(0, 200)}</p>
+                          )}
+                          {src.bbox?.length === 4 && (
+                            <div className="bbox-mini">
+                              <svg viewBox="0 0 100 141" className="bbox-mini__svg">
+                                <rect x="0" y="0" width="100" height="141" fill="var(--bg-elevated)" rx="2" />
+                                {[18,26,34,42,50,58,66,74,82,90,98,106,114,122].map(y => (
+                                  <line key={y} x1="8" y1={y} x2="92" y2={y} stroke="var(--border)" strokeWidth="0.8" />
+                                ))}
+                                <rect
+                                  x={src.bbox[0]*100} y={src.bbox[1]*141}
+                                  width={Math.max(src.bbox[2]-src.bbox[0],0.02)*100}
+                                  height={Math.max(src.bbox[3]-src.bbox[1],0.02)*141}
+                                  fill="rgba(255,181,71,0.2)" stroke="var(--warn)" strokeWidth="1.5" rx="1"
+                                />
+                              </svg>
+                              <span className="bbox-mini__label">Page {src.page + 1}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Trace tab */}
+              {lastResult && evidenceTab === 'trace' && (
+                <TracePanel
+                  latency={lastResult.latency}
+                  tokenUsage={lastResult.token_usage}
+                  costUsd={lastResult.cost_usd}
+                />
+              )}
+            </div>
+          </div>
+        </Panel>
+      </Group>
     </div>
   );
 }

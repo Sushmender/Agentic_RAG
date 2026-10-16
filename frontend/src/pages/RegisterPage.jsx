@@ -1,33 +1,57 @@
 /**
- * frontend/src/pages/RegisterPage.jsx
- * User registration form.
+ * src/pages/RegisterPage.jsx
+ * Redesigned register — same split layout as Login.
  */
 
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import './AuthPage.css';
+import { Input, PasswordInput } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { PipelineVisual } from './auth/PipelineVisual';
+import { toast } from 'sonner';
+import './auth/AuthPage.css';
 
 export default function RegisterPage() {
   const { register } = useAuth();
-  const navigate = useNavigate();
+  const navigate      = useNavigate();
+
   const [form, setForm] = useState({ username: '', email: '', password: '', confirmPassword: '' });
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
+  const [apiError, setApiError] = useState('');
+  const [loading, setLoading]   = useState(false);
+
+  const validate = () => {
+    const e = {};
+    if (!form.username.trim())                      e.username = 'Username is required';
+    else if (form.username.trim().length < 3)       e.username = 'Minimum 3 characters';
+    if (!form.email.trim())                         e.email = 'Email is required';
+    else if (!/\S+@\S+\.\S+/.test(form.email))     e.email = 'Enter a valid email address';
+    if (!form.password)                             e.password = 'Password is required';
+    else if (form.password.length < 8)             e.password = 'Minimum 8 characters';
+    if (form.confirmPassword !== form.password)    e.confirmPassword = 'Passwords do not match';
+    return e;
+  };
+
+  const handleChange = (field) => (e) => {
+    setForm(prev => ({ ...prev, [field]: e.target.value }));
+    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
+    if (apiError) setApiError('');
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
-    if (form.password !== form.confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
+    const errs = validate();
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+
     setLoading(true);
+    setApiError('');
     try {
       await register(form.username, form.email, form.password);
+      toast.success('Account created! Please sign in.');
       navigate('/login');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed.');
+      setApiError(err.response?.data?.detail || 'Registration failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -35,65 +59,88 @@ export default function RegisterPage() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-header">
-          <span className="auth-logo">⚡</span>
-          <h1 className="auth-title">Multimodal RAG</h1>
-          <p className="auth-subtitle">Create your account</p>
+      {/* Left brand panel */}
+      <div className="auth-brand">
+        <PipelineVisual />
+        <div className="auth-brand__text">
+          <h1 className="auth-brand__title">Multimodal RAG</h1>
+          <p className="auth-brand__sub">
+            Retrieve from text, tables, figures, and images — all in one pipeline.
+          </p>
         </div>
+      </div>
 
-        <form onSubmit={handleSubmit} className="auth-form">
-          <div className="form-group">
-            <label>Username</label>
-            <input
+      {/* Right form panel */}
+      <div className="auth-form-panel">
+        <div className="auth-card">
+          <div className="auth-card__header">
+            <h2 className="auth-card__title">Create account</h2>
+            <p className="auth-card__sub">Start using Multimodal RAG in seconds</p>
+          </div>
+
+          <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            <Input
+              label="Username"
+              id="reg-username"
               type="text"
-              value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
               placeholder="your_username"
-              required autoFocus
+              value={form.username}
+              onChange={handleChange('username')}
+              error={errors.username}
+              autoFocus
+              autoComplete="username"
             />
-          </div>
-          <div className="form-group">
-            <label>Email</label>
-            <input
+            <Input
+              label="Email"
+              id="reg-email"
               type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
               placeholder="you@example.com"
-              required
+              value={form.email}
+              onChange={handleChange('email')}
+              error={errors.email}
+              autoComplete="email"
             />
-          </div>
-          <div className="form-group">
-            <label>Password</label>
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            <PasswordInput
+              label="Password"
+              id="reg-password"
               placeholder="min 8 characters"
-              required
+              value={form.password}
+              onChange={handleChange('password')}
+              error={errors.password}
+              autoComplete="new-password"
             />
-          </div>
-          <div className="form-group">
-            <label>Confirm Password</label>
-            <input
-              type="password"
-              value={form.confirmPassword}
-              onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+            <PasswordInput
+              label="Confirm Password"
+              id="reg-confirm-password"
               placeholder="••••••••"
-              required
+              value={form.confirmPassword}
+              onChange={handleChange('confirmPassword')}
+              error={errors.confirmPassword}
+              autoComplete="new-password"
             />
-          </div>
 
-          {error && <div className="auth-error">{error}</div>}
+            {apiError && (
+              <div className="auth-api-error" role="alert">
+                {apiError}
+              </div>
+            )}
 
-          <button type="submit" className="auth-btn" disabled={loading}>
-            {loading ? 'Creating account...' : 'Create Account'}
-          </button>
-        </form>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              loading={loading}
+              style={{ width: '100%', marginTop: '8px' }}
+            >
+              Create Account
+            </Button>
+          </form>
 
-        <p className="auth-link">
-          Already have an account? <Link to="/login">Sign In</Link>
-        </p>
+          <p className="auth-switch">
+            Already have an account?{' '}
+            <Link to="/login" className="auth-switch__link">Sign in</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

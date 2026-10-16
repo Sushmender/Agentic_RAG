@@ -1,0 +1,103 @@
+/* ── Button ────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast),
+    border-color var(--transition-fast);
+  white-space: nowrap;
+  position: relative;
+  text-decoration: none;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Size variants */
+.btn--sm { font-size: var(--text-xs); padding: 5px 12px; height: 28px; }
+.btn--md { font-size: var(--text-sm); padding: 7px 16px; height: 34px; }
+.btn--lg { font-size: var(--text-base); padding: 10px 22px; height: 42px; }
+
+/* Primary */
+.btn--primary {
+  background: var(--accent);
+  color: #0B0F1A;
+  border-radius: var(--radius-pill);
+}
+.btn--primary:not(:disabled):hover {
+  box-shadow: var(--glow-accent);
+  transform: translateY(-1px);
+}
+.btn--primary:not(:disabled):active { transform: scale(0.97); }
+
+/* Secondary */
+.btn--secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+.btn--secondary:not(:disabled):hover {
+  border-color: var(--border-hover);
+  background: rgba(255,255,255,0.04);
+}
+.btn--secondary:not(:disabled):active { transform: scale(0.97); }
+
+/* Ghost */
+.btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.btn--ghost:not(:disabled):hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+/* Danger */
+.btn--danger {
+  background: rgba(255, 92, 122, 0.12);
+  color: var(--danger);
+  border: 1px solid rgba(255, 92, 122, 0.3);
+}
+.btn--danger:not(:disabled):hover {
+  background: rgba(255, 92, 122, 0.2);
+  box-shadow: 0 0 12px rgba(255, 92, 122, 0.2);
+}
+.btn--danger:not(:disabled):active { transform: scale(0.97); }
+
+/* Icon-only */
+.btn--icon-only {
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.btn--icon-only.btn--sm { width: 28px; height: 28px; }
+.btn--icon-only.btn--md { width: 34px; height: 34px; }
+.btn--icon-only.btn--lg { width: 42px; height: 42px; }
+
+/* Spinner */
+.btn__spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0,0,0,0.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.btn--primary .btn__spinner {
+  border-color: rgba(0,0,0,0.2);
+  border-top-color: #0B0F1A;
+}
