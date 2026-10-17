@@ -23,6 +23,7 @@ from app.schemas.telemetry import (
     EmbeddingCost,
     LLMCost,
     MetricsResponse,
+    RecentQueryItem,
     StageLatency,
     TelemetryRecord,
 )
@@ -156,10 +157,28 @@ async def compute_metrics(limit: int = 5000) -> MetricsResponse:
     # ── ADE credits ───────────────────────────────────────────────────────────
     total_ade = round(sum(r.ade_credits.per_ingestion for r in ingestion_records), 4)
 
-    # ── Timestamps ────────────────────────────────────────────────────────────
+    # ── Timestamps & Recent Queries (P-4) ─────────────────────────────────────
     timestamps = [r.timestamp.isoformat() for r in records]
     oldest = min(timestamps) if timestamps else None
     newest = max(timestamps) if timestamps else None
+
+    recent_queries = [
+        RecentQueryItem(
+            id=r.record_id,
+            timestamp=r.timestamp.isoformat() if r.timestamp else None,
+            question=r.query_preview or "Query",
+            model=r.llm_cost.model or r.embedding_cost.model or "",
+            total_latency_ms=r.latency.total_ms,
+            cache_hit=r.cache_hit,
+            total_cost_usd=round(r.llm_cost.cost_usd + r.embedding_cost.cost_usd, 6),
+            embedding_ms=r.latency.embedding_ms,
+            retrieval_ms=r.latency.retrieval_ms,
+            reranking_ms=r.latency.reranking_ms,
+            llm_ms=r.latency.llm_ms,
+            ade_ms=r.latency.ade_ms,
+        )
+        for r in reversed(query_records[-50:])
+    ]
 
     return MetricsResponse(
         query_count=len(query_records),
@@ -177,4 +196,5 @@ async def compute_metrics(limit: int = 5000) -> MetricsResponse:
         records_analyzed=len(records),
         oldest_record_ts=oldest,
         newest_record_ts=newest,
+        recent_queries=recent_queries,
     )

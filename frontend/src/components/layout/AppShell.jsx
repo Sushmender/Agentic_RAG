@@ -6,6 +6,7 @@
  *   - Main content outlet
  *   - 36px bottom status bar
  * Responsive: <900px → bottom tab bar; <640px → status bar hides
+ * D2-T4: Command palette (Ctrl/Cmd+K), keyboard shortcuts, shortcuts modal
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -22,10 +23,14 @@ import {
   ChevronDown,
   Wifi,
   WifiOff,
+  Command,
 } from 'lucide-react';
 import { Tooltip } from '../ui/Tooltip';
 import { useAuth } from '../../context/AuthContext';
 import { healthAPI } from '../../services/api';
+import { CommandPalette } from './CommandPalette';
+import { ShortcutsModal } from './ShortcutsModal';
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import './AppShell.css';
 
 const NAV_ITEMS = [
@@ -48,6 +53,13 @@ export default function AppShell() {
   const navigate = useNavigate();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [health, setHealth] = useState(null); // null = unknown, true = ok, false = down
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useKeyboardShortcuts({
+    onOpenPalette: () => setCmdOpen(true),
+    onOpenShortcuts: () => setShortcutsOpen(true),
+  });
 
   const meta = PAGE_META[location.pathname] || { title: 'RAG', sub: '' };
 
@@ -55,9 +67,9 @@ export default function AppShell() {
   const pollHealth = useCallback(async () => {
     try {
       await healthAPI.check();
-      setHealth(true);
+      setHealth(prev => (prev === true ? prev : true));
     } catch {
-      setHealth(false);
+      setHealth(prev => (prev === false ? prev : false));
     }
   }, []);
 
@@ -179,6 +191,15 @@ export default function AppShell() {
                 Offline
               </span>
             )}
+            <button
+              className="topbar__cmd-hint"
+              onClick={() => setCmdOpen(true)}
+              aria-label="Open command palette"
+              title="Command palette (Ctrl+K)"
+            >
+              <Command size={12} />
+              <span>Ctrl K</span>
+            </button>
           </div>
           <div className="topbar__right">
             <button
@@ -262,6 +283,12 @@ export default function AppShell() {
           );
         })}
       </nav>
+
+      {/* ── Command Palette ─────────────────────────────────────── */}
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
+
+      {/* ── Shortcuts Modal ─────────────────────────────────────── */}
+      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }

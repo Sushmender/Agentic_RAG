@@ -30,13 +30,20 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor — handle 401 (clear token, redirect to login)
+// Response interceptor — handle 401 (clear token, redirect to login with return path)
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
+      // Store the return-to path so login can redirect back
+      const returnTo = window.location.pathname + window.location.search;
+      if (returnTo !== '/login') {
+        sessionStorage.setItem('auth_return_to', returnTo);
+      }
+      // Dispatch event so UI can show a toast before redirect
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -71,6 +78,10 @@ export const documentsAPI = {
   list: () => api.get('/documents/'),
   get: (documentId) => api.get(`/documents/${documentId}`),
   getChunk: (documentId, chunkId) => api.get(`/documents/${documentId}/chunks/${chunkId}`),
+  getPageImage: (documentId, page) =>
+    api.get(`/documents/${documentId}/pages/${page}/image`, {
+      responseType: 'blob',
+    }),
   delete: (documentId) => api.delete(`/documents/${documentId}`),
 };
 

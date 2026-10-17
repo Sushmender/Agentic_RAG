@@ -32,17 +32,21 @@
   color: var(--text-muted);
 }
 
-.field__input:focus {
+.field__input:focus,
+.field__input:focus-visible {
+  outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(45, 226, 166, 0.12);
+  box-shadow: 0 0 0 3px rgba(45, 226, 166, 0.15);
 }
 
 .field__input--error {
   border-color: var(--danger);
 }
 
-.field__input--error:focus {
-  box-shadow: 0 0 0 3px rgba(255, 92, 122, 0.12);
+.field__input--error:focus,
+.field__input--error:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(255, 92, 122, 0.15);
 }
 
 .field__textarea {

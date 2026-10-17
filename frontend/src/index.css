@@ -30,7 +30,7 @@
   /* Text */
   --text-primary:   #E6EAF5;
   --text-secondary: #8A94AD;
-  --text-muted:     #5A6480;
+  --text-muted:     #7884A4;
 
   /* Accent palette */
   --accent:     #2DE2A6;
@@ -168,13 +168,20 @@ body {
 /* ── Focus ring utility ───────────────────────────────────── */
 .focus-ring:focus-visible,
 button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
+a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible,
+select:focus,
+select:focus-visible {
+  outline: none !important;
+}
+
 
 /* ── Typography helpers ───────────────────────────────────── */
 h1, h2, h3, h4, h5, h6 {
@@ -381,3 +388,102 @@ code, pre, .mono {
   height: 100vh;
   overflow: hidden;
 }
+
+/* ── Toasts (P-6) ─────────────────────────────────────────── */
+[data-sonner-toaster] {
+  font-family: var(--font-ui) !important;
+  z-index: 99999 !important;
+}
+
+[data-sonner-toast] {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255, 255, 255, 0.04) !important;
+  font-size: 13px !important;
+  position: relative;
+  overflow: hidden;
+  padding: 12px 16px 12px 18px !important;
+}
+
+/* Left colored accent bar */
+[data-sonner-toast]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3.5px;
+  background: var(--accent);
+}
+
+[data-sonner-toast][data-type="success"]::before {
+  background: var(--accent);
+}
+
+[data-sonner-toast][data-type="error"]::before {
+  background: var(--danger);
+}
+
+[data-sonner-toast][data-type="warning"]::before {
+  background: var(--warn);
+}
+
+[data-sonner-toast][data-type="info"]::before {
+  background: var(--info);
+}
+
+/* Strict override for any light mint or pastel fills */
+[data-sonner-toast][data-type="success"],
+[data-sonner-toast][data-type="error"],
+[data-sonner-toast][data-type="warning"],
+[data-sonner-toast][data-type="info"] {
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-sonner-toast] [data-title] {
+  color: var(--text-primary) !important;
+  font-weight: 500 !important;
+  font-size: 13px !important;
+}
+
+[data-sonner-toast] [data-description] {
+  color: var(--text-muted) !important;
+  font-size: 12px !important;
+  margin-top: 2px !important;
+}
+
+[data-sonner-toast] [data-icon] {
+  margin-right: 8px !important;
+}
+
+[data-sonner-toast][data-type="success"] [data-icon] {
+  color: var(--accent) !important;
+}
+
+[data-sonner-toast][data-type="error"] [data-icon] {
+  color: var(--danger) !important;
+}
+
+[data-sonner-toast][data-type="warning"] [data-icon] {
+  color: var(--warn) !important;
+}
+
+[data-sonner-toast][data-type="info"] [data-icon] {
+  color: var(--info) !important;
+}
+
+[data-sonner-toast] [data-close-button] {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-muted) !important;
+  border-radius: var(--radius-sm) !important;
+}
+
+[data-sonner-toast] [data-close-button]:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+}
+

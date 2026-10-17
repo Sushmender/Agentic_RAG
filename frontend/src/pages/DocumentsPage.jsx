@@ -62,16 +62,6 @@ const SORT_OPTIONS = [
 
 /* ── Helpers ────────────────────────────────────────────────── */
 
-function statusToStage(status) {
-  switch (status) {
-    case 'pending':    return 0;
-    case 'processing': return 2;
-    case 'completed':  return 4;
-    case 'failed':     return -1;
-    default:           return 0;
-  }
-}
-
 /* ── Copy-to-clipboard chip ─────────────────────────────────── */
 function CopyChip({ value, label }) {
   const [copied, setCopied] = useState(false);
@@ -91,20 +81,46 @@ function CopyChip({ value, label }) {
 
 /* ── Pipeline stage stepper ─────────────────────────────────── */
 function PipelineStepper({ status }) {
-  const stage   = statusToStage(status);
-  const failed  = status === 'failed';
+  const failed = status === 'failed';
+  const isProcessing = status === 'processing';
+  const isPending = status === 'pending';
+  const isCompleted = status === 'completed';
+
   return (
-    <div className="pipeline-stepper">
+    <div
+      className="pipeline-stepper"
+      title={
+        isProcessing
+          ? 'Ingestion in progress (Parse · Chunk · Embed · Index)'
+          : isPending
+          ? 'Document queued for ingestion'
+          : undefined
+      }
+    >
       {PIPELINE_STAGES.map((s, i) => {
-        const done    = !failed && stage >= i;
-        const active  = !failed && stage === i && status === 'processing';
-        const errored = failed && i === stage || (failed && i <= 2);
+        // Honest mapping of coarse backend status:
+        // Upload is done for pending/processing/completed
+        // Processing pulses the active pipeline stages (Parse, Chunk, Embed, Index)
+        const done = isCompleted || (!failed && i === 0);
+        const active = isProcessing && i >= 1;
+        const pending = isPending && i >= 1;
+        const errored = failed && i >= 1;
         return (
           <div key={s} className="pipeline-stepper__step">
-            <div className={`step-dot ${done ? 'step-dot--done' : ''} ${active ? 'step-dot--active' : ''} ${errored ? 'step-dot--error' : ''}`} />
+            <div
+              className={`step-dot ${done ? 'step-dot--done' : ''} ${
+                active ? 'step-dot--active' : ''
+              } ${pending ? 'step-dot--pending' : ''} ${
+                errored ? 'step-dot--error' : ''
+              }`}
+            />
             <span className="step-label">{s}</span>
             {i < PIPELINE_STAGES.length - 1 && (
-              <div className={`step-line ${done && stage > i ? 'step-line--done' : ''}`} />
+              <div
+                className={`step-line ${
+                  done || (isProcessing && i === 0) ? 'step-line--done' : ''
+                }`}
+              />
             )}
           </div>
         );
@@ -179,6 +195,11 @@ function DocumentCard({ doc, onQuery, onDelete, onViewDetails, view }) {
         <span className="doc-list-row__meta">{typeMeta.label} · {sizeKB} KB{doc.chunk_count > 0 ? ` · ${doc.chunk_count} chunks` : ''}</span>
       </div>
       {doc.document_id && <CopyChip value={doc.document_id} label="Document ID" />}
+      {(doc.status === 'processing' || doc.status === 'pending') && (
+        <div className="doc-list-row__stepper">
+          <PipelineStepper status={doc.status} />
+        </div>
+      )}
       <StatusBadge status={doc.status} />
       <div className="doc-list-row__actions">
         {doc.status === 'completed' && (
@@ -222,6 +243,22 @@ function DocSkeleton({ view }) {
 
 /* ── Details drawer ─────────────────────────────────────────── */
 function DetailsDrawer({ doc, onClose }) {
+  const drawerRef = useRef(null);
+
+  useEffect(() => {
+    if (!doc) return;
+    const prev = document.activeElement;
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKey);
+    drawerRef.current?.focus();
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      prev?.focus?.();
+    };
+  }, [doc, onClose]);
+
   if (!doc) return null;
   const typeMeta = FILE_TYPE_META[doc.document_type] || { label: doc.document_type?.toUpperCase() };
   const sizeKB   = (doc.file_size_bytes / 1024).toFixed(1);
@@ -238,12 +275,16 @@ function DetailsDrawer({ doc, onClose }) {
             onClick={onClose}
           />
           <motion.aside
+            ref={drawerRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Document details"
             className="drawer"
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-            aria-label="Document details"
           >
             <div className="drawer__header">
               <h2 className="drawer__title">Document Details</h2>

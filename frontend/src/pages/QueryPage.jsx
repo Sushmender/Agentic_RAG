@@ -18,19 +18,40 @@ import { toast } from 'sonner';
 import {
   Send, RotateCcw, Copy, ChevronDown, Zap, Cpu,
   FileText, Table2, Image, Activity, MessageSquare,
-  Sparkles, X, Check, AlertTriangle,
+  Sparkles, X, Check, AlertTriangle, Info,
 } from 'lucide-react';
 import { documentsAPI, queryAPI } from '../services/api';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Kbd } from '../components/ui/Kbd';
+import { PageEvidence, revokeAllPageBlobUrls } from '../components/PageEvidence';
+import { formatRelevance } from '../utils/relevance';
 import './QueryPage.css';
+
+function formatModelName(model) {
+  if (!model) return '';
+  const id = model.split('/').pop() || model;
+  if (/qwen/i.test(id)) {
+    // Derive version (e.g. 3.8) and size (e.g. 27B) from actual model ID (e.g. qwen3.8-27b)
+    const match = id.match(/qwen[^\d]*(\d+(?:\.\d+)?)[^\d]*(\d+b)?/i);
+    if (match) {
+      const ver = match[1];
+      const size = match[2] ? ` ${match[2].toUpperCase()}` : '';
+      return `Qwen ${ver}${size}`;
+    }
+    return 'Qwen 3.8 27B';
+  }
+  if (/nemotron/i.test(id)) {
+    return 'Nemotron 120B';
+  }
+  return id;
+}
 
 /* ── Constants ─────────────────────────────────────────────── */
 
 const PROVIDER_OPTIONS = [
-  { value: 'groq',       label: 'Qwen 3 27B',    provider: 'Groq',        icon: Zap  },
+  { value: 'groq',       label: 'Qwen 3.8 27B',   provider: 'Groq',        icon: Zap  },
   { value: 'openrouter', label: 'Nemotron 120B',  provider: 'OpenRouter',  icon: Cpu  },
 ];
 
@@ -127,7 +148,7 @@ function AssistantBubble({ result, onCitationClick, onRegenerate }) {
         )}
         {result.model_used && (
           <span className="model-chip">
-            {result.model_used.split('/').pop()?.split('-').slice(0, 3).join('-')}
+            {formatModelName(result.model_used)}
           </span>
         )}
       </div>
@@ -185,9 +206,38 @@ function AssistantBubble({ result, onCitationClick, onRegenerate }) {
 }
 
 /* ── Source card ────────────────────────────────────────────── */
-function SourceCard({ source, rank, isHighlighted }) {
+function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
   const [expanded, setExpanded] = useState(false);
+  const ext = (source.filename || '').split('.').pop()?.toLowerCase();
+  const isImageOrPdf = ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext);
+  const [viewMode, setViewMode] = useState(() => (isImageOrPdf ? 'page' : 'text'));
+  const [showDebug, setShowDebug] = useState(false);
+  const [fallbackNote, setFallbackNote] = useState(() =>
+    !isImageOrPdf ? 'Document format does not support page render — showing extracted text' : ''
+  );
   const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
+
+  // Auto-expand and switch to page view when highlighted via citation click (if renderable)
+  useEffect(() => {
+    if (isHighlighted) {
+      setExpanded(true);
+      if (isImageOrPdf) {
+        setViewMode('page');
+      }
+    }
+  }, [isHighlighted, isImageOrPdf]);
+
+  // All chunks on the same document and page
+  const chunksOnPage = useMemo(() => {
+    return allSources
+      .map((s, idx) => ({ ...s, rank: idx + 1 }))
+      .filter((s) => s.document_id === source.document_id && s.page === source.page);
+  }, [allSources, source.document_id, source.page]);
+
+  const handlePageError = useCallback(() => {
+    setViewMode('text');
+    setFallbackNote('Page preview unavailable — showing extracted text');
+  }, []);
 
   return (
     <div
@@ -205,30 +255,107 @@ function SourceCard({ source, rank, isHighlighted }) {
           {source.filename || 'Unknown file'}
         </span>
         <span className="source-page">p.{source.page + 1}</span>
-        <span className="source-score">{(source.relevance_score * 100).toFixed(0)}%</span>
+        {(() => {
+          const rel = formatRelevance(source.relevance_score);
+          return (
+            <span
+              className={`source-score source-score--${rel.tier}`}
+              title={`Raw score: ${rel.raw}`}
+            >
+              {rel.label}
+            </span>
+          );
+        })()}
         <ChevronDown size={14} className={`source-chevron ${expanded ? 'source-chevron--open' : ''}`} />
       </button>
+
       {expanded && (
         <div className="source-card__body animate-fade-in">
-          {source.text_preview && (
+          {/* Text | Page Mode Toggle */}
+          <div className="source-card__mode-toggle">
+            <div className="source-mode-tabs" role="group" aria-label="Evidence view mode">
+              <button
+                type="button"
+                className={`source-mode-tab ${viewMode === 'page' ? 'source-mode-tab--active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); if (isImageOrPdf) setViewMode('page'); }}
+                aria-pressed={viewMode === 'page'}
+                disabled={!isImageOrPdf}
+                title={!isImageOrPdf ? 'Page render unavailable for this document format' : undefined}
+              >
+                Page
+              </button>
+              <button
+                type="button"
+                className={`source-mode-tab ${viewMode === 'text' ? 'source-mode-tab--active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); setViewMode('text'); }}
+                aria-pressed={viewMode === 'text'}
+              >
+                Text
+              </button>
+            </div>
+            <span className="source-meta__label">Chunk #{rank}</span>
+          </div>
+
+          {/* View mode body */}
+          {viewMode === 'page' ? (
+            <PageEvidence
+              documentId={source.document_id}
+              page={source.page}
+              activeChunkId={source.chunk_id}
+              chunksOnPage={chunksOnPage}
+              activeRank={rank}
+              isFocused={isHighlighted}
+              filename={source.filename}
+              onError={handlePageError}
+            />
+          ) : (
             <div className="source-preview">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{source.text_preview}</ReactMarkdown>
+              {fallbackNote && (
+                <div className="source-fallback-note">
+                  <Info size={12} />
+                  <span>{fallbackNote}</span>
+                </div>
+              )}
+              {source.text_preview ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{source.text_preview}</ReactMarkdown>
+              ) : (
+                <p className="text-secondary">No text preview available.</p>
+              )}
             </div>
           )}
-          <div className="source-meta">
-            <span className="source-meta__item">
-              <span className="source-meta__label">Chunk</span>
-              <code className="source-meta__val">{source.chunk_id?.slice(0, 16)}…</code>
-            </span>
-            <span className="source-meta__item">
-              <span className="source-meta__label">Doc</span>
-              <code className="source-meta__val">{source.document_id?.slice(0, 12)}…</code>
-            </span>
-            {source.bbox?.length === 4 && (
-              <span className="source-meta__item">
-                <span className="source-meta__label">BBox</span>
-                <code className="source-meta__val">[{source.bbox.map(v => v.toFixed(2)).join(', ')}]</code>
-              </span>
+
+          {/* Collapsed Debug row */}
+          <div className="source-debug-section">
+            <button
+              type="button"
+              className="source-debug-toggle"
+              onClick={() => setShowDebug(v => !v)}
+              aria-expanded={showDebug}
+            >
+              <span>Debug metadata</span>
+              <ChevronDown size={11} className={showDebug ? 'rotate-180' : ''} />
+            </button>
+            {showDebug && (
+              <div className="source-meta animate-fade-in">
+                <span className="source-meta__item">
+                  <span className="source-meta__label">Chunk ID</span>
+                  <code className="source-meta__val">{source.chunk_id?.slice(0, 16)}…</code>
+                </span>
+                <span className="source-meta__item">
+                  <span className="source-meta__label">Doc ID</span>
+                  <code className="source-meta__val">{source.document_id?.slice(0, 12)}…</code>
+                </span>
+                {source.bbox?.length === 4 && (
+                  <span className="source-meta__item">
+                    <span className="source-meta__label">BBox [L, T, R, B]</span>
+                    <code className="source-meta__val">[{source.bbox.map(v => v.toFixed(3)).join(', ')}]</code>
+                  </span>
+                )}
+                <span className="source-meta__item">
+                  <span className="source-meta__label">Raw score</span>
+                  <code className="source-meta__val">{Number(source.relevance_score).toFixed(4)}</code>
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -345,6 +472,13 @@ export default function QueryPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  // Cleanup page blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      revokeAllPageBlobUrls();
+    };
+  }, []);
+
   // Auto-resize textarea
   const handleQueryChange = (e) => {
     setQuery(e.target.value);
@@ -437,6 +571,14 @@ export default function QueryPage() {
     setError(null);
   };
 
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 768);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const evidenceTabs = [
     { value: 'sources', label: 'Sources',   count: sourcesForCurrentResult.length },
     { value: 'tables',  label: 'Tables',    count: tablesInSources.length },
@@ -446,7 +588,7 @@ export default function QueryPage() {
 
   return (
     <div className="query-page">
-      <Group orientation="horizontal" className="query-panels">
+      <Group orientation={isMobile ? 'vertical' : 'horizontal'} className="query-panels">
         {/* ── Left: Conversation ──────────────────────────────── */}
         <Panel defaultSize="60%" minSize="35%" className="conv-panel">
           <div className="conv-panel__inner">
@@ -627,6 +769,7 @@ export default function QueryPage() {
                         source={src}
                         rank={i + 1}
                         isHighlighted={highlighted === String(i + 1)}
+                        allSources={sourcesForCurrentResult}
                       />
                     ))
                   )}
@@ -643,7 +786,17 @@ export default function QueryPage() {
                       <div key={src.chunk_id} className="table-chunk">
                         <div className="table-chunk__header">
                           <span>Table from {src.filename} · p.{src.page + 1}</span>
-                          <span className="source-score">{(src.relevance_score * 100).toFixed(0)}%</span>
+                          {(() => {
+                            const rel = formatRelevance(src.relevance_score);
+                            return (
+                              <span
+                                className={`source-score source-score--${rel.tier}`}
+                                title={`Raw score: ${rel.raw}`}
+                              >
+                                {rel.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                         <div className="table-chunk__content">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{src.text_preview}</ReactMarkdown>

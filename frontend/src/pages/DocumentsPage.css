@@ -466,7 +466,27 @@
 
 .step-dot--done    { background: var(--accent); border-color: var(--accent); }
 .step-dot--active  { background: var(--warn); border-color: var(--warn); animation: pulse 1s ease-in-out infinite; }
+.step-dot--pending { background: var(--bg-surface); border-color: var(--border); }
 .step-dot--error   { background: var(--danger); border-color: var(--danger); }
+
+.doc-list-row__stepper {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 0 8px;
+}
+
+@media (max-width: 900px) {
+  .doc-list-row__stepper .step-label {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .doc-list-row__stepper {
+    display: none;
+  }
+}
 
 .step-label {
   font-size: 10px;

@@ -155,3 +155,22 @@ class MetricsResponse(BaseModel):
     records_analyzed: int = 0
     oldest_record_ts: Optional[str] = None
     newest_record_ts: Optional[str] = None
+
+    # Recent queries list (P-4)
+    recent_queries: list[RecentQueryItem] = Field(default_factory=list)
+
+
+class RecentQueryItem(BaseModel):
+    """Recent query item for the Observability table and trace drawer."""
+    id: str
+    timestamp: Optional[str] = None
+    question: str = ""
+    model: str = ""
+    total_latency_ms: float = 0.0
+    cache_hit: bool = False
+    total_cost_usd: float = 0.0
+    embedding_ms: float = 0.0
+    retrieval_ms: float = 0.0
+    reranking_ms: float = 0.0
+    llm_ms: float = 0.0
+    ade_ms: float = 0.0
