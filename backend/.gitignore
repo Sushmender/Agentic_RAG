@@ -21,6 +21,7 @@ build/
 data/uploads/
 data/ade_outputs/
 data/chroma_db/
+data/page_cache/
 data/telemetry.jsonl
 data/rag.db
 data/gold_dataset.json

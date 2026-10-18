@@ -17,19 +17,18 @@ import {
   MessageSquare,
   BarChart3,
   FlaskConical,
-  LogOut,
-  User,
   Activity,
-  ChevronDown,
   Wifi,
   WifiOff,
   Command,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Tooltip } from '../ui/Tooltip';
 import { useAuth } from '../../context/AuthContext';
 import { healthAPI } from '../../services/api';
 import { CommandPalette } from './CommandPalette';
 import { ShortcutsModal } from './ShortcutsModal';
+import { UserMenu } from './UserMenu';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import './AppShell.css';
 
@@ -51,7 +50,7 @@ export default function AppShell() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [openMenu, setOpenMenu] = useState(null); // 'topbar' | 'rail' | null
   const [health, setHealth] = useState(null); // null = unknown, true = ok, false = down
   const [cmdOpen, setCmdOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -80,9 +79,10 @@ export default function AppShell() {
   }, [pollHealth]);
 
   const handleLogout = () => {
-    setUserMenuOpen(false);
+    setOpenMenu(null);
     logout();
     navigate('/login');
+    toast.success('Signed out');
   };
 
   const isActive = (path) =>
@@ -130,43 +130,18 @@ export default function AppShell() {
 
         {/* Bottom: user avatar */}
         <div className="rail__bottom">
-          <div className="rail__avatar-wrap">
-            <Tooltip content={`${user?.username} — Account`} placement="right">
-              <button
-                className="rail__avatar"
-                onClick={() => setUserMenuOpen(v => !v)}
-                aria-label="User menu"
-                aria-expanded={userMenuOpen}
-              >
-                <User size={18} />
-              </button>
-            </Tooltip>
-            <AnimatePresence>
-              {userMenuOpen && (
-                <motion.div
-                  className="user-menu"
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -8 }}
-                  transition={{ duration: 0.15 }}
-                >
-                  <div className="user-menu__header">
-                    <span className="user-menu__name">{user?.username}</span>
-                    <span className="user-menu__label">Signed in</span>
-                  </div>
-                  <hr className="user-menu__divider" />
-                  <button
-                    className="user-menu__item user-menu__item--danger"
-                    onClick={handleLogout}
-                    id="logout-btn"
-                  >
-                    <LogOut size={14} />
-                    Sign out
-                  </button>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          <UserMenu
+            id="rail-user-menu"
+            placement="right-end"
+            isOpen={openMenu === 'rail'}
+            onOpenChange={(open) => setOpenMenu(open ? 'rail' : null)}
+            user={user}
+            health={health}
+            onOpenShortcuts={() => setShortcutsOpen(true)}
+            onOpenPalette={() => setCmdOpen(true)}
+            onLogout={handleLogout}
+            tooltipText={`${user?.username} — Account`}
+          />
         </div>
       </nav>
 
@@ -202,17 +177,17 @@ export default function AppShell() {
             </button>
           </div>
           <div className="topbar__right">
-            <button
-              className="topbar__avatar-btn"
-              onClick={() => setUserMenuOpen(v => !v)}
-              aria-label="User menu"
-            >
-              <span className="topbar__avatar-initial">
-                {user?.username?.[0]?.toUpperCase()}
-              </span>
-              <span className="topbar__username">{user?.username}</span>
-              <ChevronDown size={14} />
-            </button>
+            <UserMenu
+              id="topbar-user-menu"
+              placement="bottom-end"
+              isOpen={openMenu === 'topbar'}
+              onOpenChange={(open) => setOpenMenu(open ? 'topbar' : null)}
+              user={user}
+              health={health}
+              onOpenShortcuts={() => setShortcutsOpen(true)}
+              onOpenPalette={() => setCmdOpen(true)}
+              onLogout={handleLogout}
+            />
           </div>
         </header>
 

@@ -18,15 +18,17 @@ import { toast } from 'sonner';
 import {
   Send, RotateCcw, Copy, ChevronDown, Zap, Cpu,
   FileText, Table2, Image, Activity, MessageSquare,
-  Sparkles, X, Check, AlertTriangle, Info,
+  Sparkles, X, Check, AlertTriangle, Info, Highlighter, Quote,
 } from 'lucide-react';
 import { documentsAPI, queryAPI } from '../services/api';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Kbd } from '../components/ui/Kbd';
+import { Tooltip } from '../components/ui/Tooltip';
 import { PageEvidence, revokeAllPageBlobUrls } from '../components/PageEvidence';
 import { formatRelevance } from '../utils/relevance';
+import { findSupportingSentences, highlightInChildren } from '../utils/highlight';
 import './QueryPage.css';
 
 function formatModelName(model) {
@@ -206,16 +208,101 @@ function AssistantBubble({ result, onCitationClick, onRegenerate }) {
 }
 
 /* ── Source card ────────────────────────────────────────────── */
-function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
+function SourceCard({ source, rank, isHighlighted, allSources = [], answer = '', query = '' }) {
   const [expanded, setExpanded] = useState(false);
   const ext = (source.filename || '').split('.').pop()?.toLowerCase();
-  const isImageOrPdf = ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext);
+  const isImageOrPdf = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tiff'].includes(ext);
   const [viewMode, setViewMode] = useState(() => (isImageOrPdf ? 'page' : 'text'));
   const [showDebug, setShowDebug] = useState(false);
-  const [fallbackNote, setFallbackNote] = useState(() =>
-    !isImageOrPdf ? 'Document format does not support page render — showing extracted text' : ''
-  );
+  const [fallbackNote, setFallbackNote] = useState('');
+  const [expandedText, setExpandedText] = useState(false);
+  const [isClamped, setIsClamped] = useState(false);
+  const contentRef = useRef(null);
+
+  // Persistent highlight on/off toggle
+  const [highlightEnabled, setHighlightEnabled] = useState(() => {
+    try {
+      const saved = localStorage.getItem('rag_source_highlight');
+      return saved !== null ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleHighlight = (e) => {
+    e?.stopPropagation();
+    setHighlightEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('rag_source_highlight', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const typeMeta = CHUNK_TYPE_META[source.chunk_type] || CHUNK_TYPE_META.text;
+
+  // Extract leading markdown heading and clean body
+  const { extractedHeading, cleanBody } = useMemo(() => {
+    const raw = source.text_preview || '';
+    const stripped = raw.replace(/^<a\s+id=['"][^'"]*['"]>\s*<\/a>\s*/i, '').trimStart();
+    const headingMatch = stripped.match(/^(#{1,6})\s+([^\n]+)(?:\n+([\s\S]*))?$/);
+    if (headingMatch) {
+      const h = headingMatch[2].trim();
+      const b = (headingMatch[3] || '').trim();
+      return {
+        extractedHeading: h,
+        cleanBody: b || stripped,
+      };
+    }
+    return { extractedHeading: null, cleanBody: stripped };
+  }, [source.text_preview]);
+
+  // Section context line: breadcrumb > section/heading > extracted heading
+  const sectionContext = useMemo(() => {
+    if (source.breadcrumb) return source.breadcrumb;
+    if (source.section && source.heading && source.section !== source.heading) {
+      return `${source.section} › ${source.heading}`;
+    }
+    if (source.section) return source.section;
+    if (source.heading) return source.heading;
+    if (extractedHeading) return extractedHeading;
+    return null;
+  }, [source.breadcrumb, source.section, source.heading, extractedHeading]);
+
+  // Header location badge:
+  // PPTX -> Slide N; XLSX -> Sheet name; DOCX -> Section heading if available, otherwise hide; PDF/image -> p.N
+  const locationBadge = useMemo(() => {
+    if (isImageOrPdf) {
+      return source.page !== undefined && source.page !== null ? `p.${source.page + 1}` : null;
+    }
+    if (ext === 'pptx' || ext === 'ppt') {
+      if (source.slide) return `Slide ${source.slide}`;
+      if (source.page !== undefined && source.page !== null) return `Slide ${source.page + 1}`;
+      return null;
+    }
+    if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+      if (source.sheet_name) return source.sheet_name;
+      if (source.sheet) return source.sheet;
+      return null;
+    }
+    if (ext === 'docx' || ext === 'doc') {
+      if (source.section) return source.section;
+      if (source.heading) return source.heading;
+      if (extractedHeading) return extractedHeading;
+      return null;
+    }
+    if (source.section) return source.section;
+    if (source.heading) return source.heading;
+    if (extractedHeading) return extractedHeading;
+    return null;
+  }, [isImageOrPdf, ext, source.page, source.slide, source.sheet_name, source.sheet, source.section, source.heading, extractedHeading]);
+
+  // Supporting sentences for highlight
+  const supportingSentences = useMemo(() => {
+    if (!highlightEnabled || !answer) return [];
+    return findSupportingSentences(cleanBody, answer, query);
+  }, [highlightEnabled, cleanBody, answer, query]);
 
   // Auto-expand and switch to page view when highlighted via citation click (if renderable)
   useEffect(() => {
@@ -226,6 +313,18 @@ function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
       }
     }
   }, [isHighlighted, isImageOrPdf]);
+
+  // Check if content exceeds ~6 lines to show "Show more" toggle
+  useEffect(() => {
+    if (contentRef.current) {
+      const raf = requestAnimationFrame(() => {
+        if (contentRef.current) {
+          setIsClamped(contentRef.current.scrollHeight > 155);
+        }
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [cleanBody, expanded, viewMode]);
 
   // All chunks on the same document and page
   const chunksOnPage = useMemo(() => {
@@ -238,6 +337,70 @@ function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
     setViewMode('text');
     setFallbackNote('Page preview unavailable — showing extracted text');
   }, []);
+
+  // Citation string: filename — section/slide/sheet
+  const getCitationString = () => {
+    const filename = source.filename || 'Unknown file';
+    let target = '';
+    if (isImageOrPdf) {
+      target = source.page !== undefined ? `p.${source.page + 1}` : '';
+    } else if (ext === 'pptx' || ext === 'ppt') {
+      target = source.slide ? `Slide ${source.slide}` : (source.page !== undefined ? `Slide ${source.page + 1}` : '');
+    } else if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
+      target = source.sheet_name || source.sheet || (source.page !== undefined ? `Sheet ${source.page + 1}` : '');
+    } else if (ext === 'docx' || ext === 'doc') {
+      target = source.section || source.heading || sectionContext || '';
+    } else {
+      target = sectionContext || (source.page !== undefined ? `p.${source.page + 1}` : '');
+    }
+
+    return target ? `${filename} — ${target}` : filename;
+  };
+
+  const handleCopyCitation = async (e) => {
+    e.stopPropagation();
+    const citation = getCitationString();
+    try {
+      await navigator.clipboard.writeText(citation);
+      toast.success('Citation copied');
+    } catch {
+      toast.error('Failed to copy citation');
+    }
+  };
+
+  const handleCopyText = async (e) => {
+    e.stopPropagation();
+    const textToCopy = cleanBody || source.text_preview || '';
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      toast.success('Text copied');
+    } catch {
+      toast.error('Failed to copy text');
+    }
+  };
+
+  // Markdown custom renderers for tables, paragraphs with highlighted sentences
+  const markdownComponents = useMemo(() => ({
+    table: ({ children, ...props }) => (
+      <div className="source-table-wrapper">
+        <table className="source-table" {...props}>
+          {children}
+        </table>
+      </div>
+    ),
+    p: ({ children, ...props }) => (
+      <p {...props}>{highlightInChildren(children, supportingSentences)}</p>
+    ),
+    li: ({ children, ...props }) => (
+      <li {...props}>{highlightInChildren(children, supportingSentences)}</li>
+    ),
+    td: ({ children, ...props }) => (
+      <td {...props}>{highlightInChildren(children, supportingSentences)}</td>
+    ),
+    blockquote: ({ children, ...props }) => (
+      <blockquote {...props}>{highlightInChildren(children, supportingSentences)}</blockquote>
+    ),
+  }), [supportingSentences]);
 
   return (
     <div
@@ -254,7 +417,11 @@ function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
         <span className="source-filename" title={source.filename}>
           {source.filename || 'Unknown file'}
         </span>
-        <span className="source-page">p.{source.page + 1}</span>
+        {locationBadge && (
+          <span className="source-page" title={locationBadge}>
+            {locationBadge}
+          </span>
+        )}
         {(() => {
           const rel = formatRelevance(source.relevance_score);
           return (
@@ -271,33 +438,40 @@ function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
 
       {expanded && (
         <div className="source-card__body animate-fade-in">
-          {/* Text | Page Mode Toggle */}
+          {/* Mode Toggle or Non-renderable format chip */}
           <div className="source-card__mode-toggle">
-            <div className="source-mode-tabs" role="group" aria-label="Evidence view mode">
-              <button
-                type="button"
-                className={`source-mode-tab ${viewMode === 'page' ? 'source-mode-tab--active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); if (isImageOrPdf) setViewMode('page'); }}
-                aria-pressed={viewMode === 'page'}
-                disabled={!isImageOrPdf}
-                title={!isImageOrPdf ? 'Page render unavailable for this document format' : undefined}
-              >
-                Page
-              </button>
-              <button
-                type="button"
-                className={`source-mode-tab ${viewMode === 'text' ? 'source-mode-tab--active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); setViewMode('text'); }}
-                aria-pressed={viewMode === 'text'}
-              >
-                Text
-              </button>
-            </div>
+            {isImageOrPdf ? (
+              <div className="source-mode-tabs" role="group" aria-label="Evidence view mode">
+                <button
+                  type="button"
+                  className={`source-mode-tab ${viewMode === 'page' ? 'source-mode-tab--active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); setViewMode('page'); }}
+                  aria-pressed={viewMode === 'page'}
+                >
+                  Page
+                </button>
+                <button
+                  type="button"
+                  className={`source-mode-tab ${viewMode === 'text' ? 'source-mode-tab--active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); setViewMode('text'); }}
+                  aria-pressed={viewMode === 'text'}
+                >
+                  Text
+                </button>
+              </div>
+            ) : (
+              <Tooltip content="Page preview is available for PDFs and images" placement="top">
+                <span className="source-format-chip">
+                  <FileText size={12} className="source-format-icon" />
+                  <span>{(ext || 'txt').toUpperCase()} · text view</span>
+                </span>
+              </Tooltip>
+            )}
             <span className="source-meta__label">Chunk #{rank}</span>
           </div>
 
           {/* View mode body */}
-          {viewMode === 'page' ? (
+          {isImageOrPdf && viewMode === 'page' ? (
             <PageEvidence
               documentId={source.document_id}
               page={source.page}
@@ -316,13 +490,87 @@ function SourceCard({ source, rank, isHighlighted, allSources = [] }) {
                   <span>{fallbackNote}</span>
                 </div>
               )}
-              {source.text_preview ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{source.text_preview}</ReactMarkdown>
-              ) : (
-                <p className="text-secondary">No text preview available.</p>
+
+              {/* Section Context line */}
+              {sectionContext && (
+                <div className="source-section-context" title={sectionContext}>
+                  <FileText size={11} className="source-section-icon" />
+                  <span className="source-section-text">{sectionContext}</span>
+                </div>
+              )}
+
+              {/* Clamped markdown body */}
+              <div
+                ref={contentRef}
+                className={`source-preview-content ${
+                  isClamped && !expandedText ? 'source-preview-content--clamped' : ''
+                }`}
+              >
+                {cleanBody ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={markdownComponents}
+                  >
+                    {cleanBody}
+                  </ReactMarkdown>
+                ) : (
+                  <p className="text-secondary">No text preview available.</p>
+                )}
+              </div>
+
+              {isClamped && (
+                <button
+                  type="button"
+                  className="source-expand-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedText((v) => !v);
+                  }}
+                  aria-expanded={expandedText}
+                >
+                  {expandedText ? 'Show less' : 'Show more'}
+                </button>
               )}
             </div>
           )}
+
+          {/* Action Row */}
+          <div className="source-card__actions">
+            <button
+              type="button"
+              className="source-action-btn"
+              onClick={handleCopyText}
+              title="Copy chunk text"
+            >
+              <Copy size={12} />
+              <span>Copy text</span>
+            </button>
+            <button
+              type="button"
+              className="source-action-btn"
+              onClick={handleCopyCitation}
+              title="Copy citation"
+            >
+              <Quote size={12} />
+              <span>Copy citation</span>
+            </button>
+            <button
+              type="button"
+              className={`source-action-btn source-action-btn--toggle ${
+                highlightEnabled ? 'source-action-btn--active' : ''
+              }`}
+              onClick={toggleHighlight}
+              title={
+                highlightEnabled
+                  ? 'Highlight: on (click to disable)'
+                  : 'Highlight: off (click to enable)'
+              }
+              aria-pressed={highlightEnabled}
+            >
+              <Highlighter size={12} />
+              <span>Highlight: {highlightEnabled ? 'on' : 'off'}</span>
+            </button>
+          </div>
 
           {/* Collapsed Debug row */}
           <div className="source-debug-section">
@@ -770,6 +1018,8 @@ export default function QueryPage() {
                         rank={i + 1}
                         isHighlighted={highlighted === String(i + 1)}
                         allSources={sourcesForCurrentResult}
+                        answer={lastResult?.answer}
+                        query={lastResult?.query}
                       />
                     ))
                   )}

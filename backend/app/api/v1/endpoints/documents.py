@@ -376,7 +376,7 @@ async def get_chunk(
 @router.get(
     "/{document_id}/pages/{page}/image",
     summary="Get rendered page image for a document",
-    description="Renders PDF page as PNG with PyMuPDF, or serves original image file. Cached on disk.",
+    description="Renders PDF page as PNG with PyMuPDF in memory, or serves original image file.",
 )
 async def get_page_image(
     document_id: str,
@@ -411,13 +411,8 @@ async def get_page_image(
     ) or (doc.mime_type and doc.mime_type.startswith("image/")):
         return FileResponse(file_path, media_type=doc.mime_type or "image/png")
 
-    # 2. PDF documents: render requested page using PyMuPDF and disk-cache
+    # 2. PDF documents: render requested page in memory using PyMuPDF
     if doc.document_type == DocumentType.PDF or file_path.suffix.lower() == ".pdf":
-        cache_dir = Path("./data/page_cache") / document_id
-        cache_file = cache_dir / f"page_{page}.png"
-        if cache_file.exists():
-            return FileResponse(cache_file, media_type="image/png")
-
         try:
             import pymupdf
         except ImportError:
@@ -446,8 +441,7 @@ async def get_page_image(
         try:
             page_obj = pdf_doc[page]
             pix = page_obj.get_pixmap(dpi=150)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            pix.save(str(cache_file))
+            img_bytes = pix.tobytes("png")
         except Exception as e:
             logger.error("Failed to render PDF page", page=page, error=str(e))
             raise HTTPException(
@@ -457,7 +451,11 @@ async def get_page_image(
         finally:
             pdf_doc.close()
 
-        return FileResponse(cache_file, media_type="image/png")
+        return Response(
+            content=img_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
 
     # 3. DOCX/PPTX/XLSX without converted PDF
     raise HTTPException(
@@ -510,9 +508,6 @@ async def delete_document_endpoint(
         ade_dir = Path(settings.ADE_OUTPUT_DIR) / document_id
         if ade_dir.exists():
             shutil.rmtree(ade_dir, ignore_errors=True)
-        page_cache_dir = Path("./data/page_cache") / document_id
-        if page_cache_dir.exists():
-            shutil.rmtree(page_cache_dir, ignore_errors=True)
     except Exception:
         pass
 
