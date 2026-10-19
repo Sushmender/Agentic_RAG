@@ -1208,3 +1208,113 @@ mark.source-highlight,
     transition: none !important;
   }
 }
+
+/* ── Active evidence message indicator ────────────────────── */
+.msg--active-evidence .msg__bubble--assistant {
+  border-left: 2px solid var(--accent);
+}
+
+.evidence-active-badge {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(45, 226, 166, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(45, 226, 166, 0.3);
+}
+
+/* ── Inline deleted document notice ───────────────────────── */
+.doc-filter-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: 0 16px 8px;
+  background: rgba(255, 181, 71, 0.12);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--warn);
+  animation: fadeIn 0.2s ease;
+}
+
+.doc-filter-notice__dismiss {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--warn);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: opacity var(--transition-fast);
+}
+
+.doc-filter-notice__dismiss:hover {
+  opacity: 1;
+}
+
+/* ── Local Error Boundary Fallback ─────────────────────────── */
+.query-view-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  padding: 40px;
+  box-sizing: border-box;
+}
+
+.query-view-fallback__card {
+  max-width: 440px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.query-view-fallback__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(255, 92, 122, 0.12);
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.query-view-fallback__card h2 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.query-view-fallback__card p {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ── Evidence Loading Skeleton ─────────────────────────────── */
+.evidence-skeleton {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+

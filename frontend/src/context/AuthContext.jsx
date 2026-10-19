@@ -33,6 +33,11 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    if (user?.user_id) {
+      try {
+        localStorage.removeItem(`rag_chats_${user.user_id}`);
+      } catch {}
+    }
     localStorage.removeItem('access_token');
     localStorage.removeItem('user');
     setToken(null);

@@ -9,7 +9,7 @@
  *   - BBox grounding, telemetry, debug panel, react-markdown
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, Component } from 'react';
 import { useLocation } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -20,7 +20,7 @@ import {
   FileText, Table2, Image, Activity, MessageSquare,
   Sparkles, X, Check, AlertTriangle, Info, Highlighter, Quote,
 } from 'lucide-react';
-import { documentsAPI, queryAPI } from '../services/api';
+import { documentsAPI } from '../services/api';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -29,6 +29,8 @@ import { Tooltip } from '../components/ui/Tooltip';
 import { PageEvidence, revokeAllPageBlobUrls } from '../components/PageEvidence';
 import { formatRelevance } from '../utils/relevance';
 import { findSupportingSentences, highlightInChildren } from '../utils/highlight';
+import { useChat, createDefaultTab } from '../context/ChatContext';
+import { ChatTabStrip } from '../components/chat/ChatTabStrip';
 import './QueryPage.css';
 
 function formatModelName(model) {
@@ -123,18 +125,74 @@ function UserBubble({ text }) {
   );
 }
 
-function AssistantBubble({ result, onCitationClick, onRegenerate }) {
-  const { displayed, done, skip } = useTypewriter(result.answer);
+function AssistantBubble({
+  msg,
+  isActiveEvidence,
+  onSelectEvidence,
+  onCitationClick,
+  onRegenerate,
+  onRevealed,
+}) {
+  const result = msg.result;
+  const isAlreadyRevealed = msg.revealed === true;
+  const { displayed, done, skip } = useTypewriter(
+    isAlreadyRevealed ? '' : (result?.answer || ''),
+    6
+  );
+
+  useEffect(() => {
+    if (!isAlreadyRevealed && done) {
+      onRevealed?.();
+    }
+  }, [isAlreadyRevealed, done, onRevealed]);
+
+  const handleSkip = (e) => {
+    e?.stopPropagation();
+    skip();
+    onRevealed?.();
+  };
+
+  const finalDisplayed = isAlreadyRevealed ? (result?.answer || '') : displayed;
+  const isTyping = !isAlreadyRevealed && !done;
 
   const preparedAnswer = useMemo(() => {
-    if (!displayed) return '';
-    return displayed.replace(/[[【]source\s*(\d+)[\]】]/gi, '[$1](#source-$1)');
-  }, [displayed]);
+    if (!finalDisplayed) return '';
+    return finalDisplayed.replace(/[[【]source\s*(\d+)[\]】]/gi, '[$1](#source-$1)');
+  }, [finalDisplayed]);
+
+  if (msg.error) {
+    return (
+      <div className="msg msg--assistant">
+        <div className="conv-error" role="alert">
+          <AlertTriangle size={15} />
+          <span>{msg.error}</span>
+          {onRegenerate && (
+            <button
+              type="button"
+              className="msg-action-btn"
+              onClick={onRegenerate}
+              style={{ marginLeft: 'auto' }}
+              aria-label="Regenerate interrupted query"
+            >
+              <RotateCcw size={13} /> Regenerate
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.pending || !result) {
+    return <QuerySkeleton />;
+  }
 
   const routeMeta = ROUTE_META[result.route_type] || ROUTE_META.text;
 
   return (
-    <div className="msg msg--assistant">
+    <div
+      className={`msg msg--assistant ${isActiveEvidence ? 'msg--active-evidence' : ''}`}
+      onClick={onSelectEvidence}
+    >
       {/* Meta chips */}
       <div className="msg__meta">
         <span className="route-chip" style={{ '--chip-color': routeMeta.color }}>
@@ -153,14 +211,19 @@ function AssistantBubble({ result, onCitationClick, onRegenerate }) {
             {formatModelName(result.model_used)}
           </span>
         )}
+        {isActiveEvidence && (
+          <span className="evidence-active-badge" title="Evidence for this answer is shown on the right">
+            Viewing evidence
+          </span>
+        )}
       </div>
 
       {/* Answer text */}
       <div
-        className={`msg__bubble msg__bubble--assistant ${!done ? 'msg__bubble--typing' : ''}`}
-        onClick={() => !done && skip()}
-        role={!done ? 'button' : undefined}
-        aria-label={!done ? 'Click to skip animation' : undefined}
+        className={`msg__bubble msg__bubble--assistant ${isTyping ? 'msg__bubble--typing' : ''}`}
+        onClick={isTyping ? handleSkip : undefined}
+        role={isTyping ? 'button' : undefined}
+        aria-label={isTyping ? 'Click to skip animation' : undefined}
         aria-live="polite"
       >
         <div className="answer-markdown">
@@ -175,32 +238,50 @@ function AssistantBubble({ result, onCitationClick, onRegenerate }) {
                       href={href}
                       className="citation-badge"
                       title={`Go to source ${num}`}
-                      onClick={(e) => { e.preventDefault(); onCitationClick(num); }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onCitationClick(num);
+                      }}
                       {...props}
                     >
                       {children}
                     </a>
                   );
                 }
-                return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+                return (
+                  <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+                    {children}
+                  </a>
+                );
               },
             }}
           >
             {preparedAnswer}
           </ReactMarkdown>
         </div>
-        {!done && (
+        {isTyping && (
           <span className="typing-cursor" aria-hidden="true">|</span>
         )}
       </div>
 
       {/* Action bar */}
-      {done && (
+      {!isTyping && (
         <div className="msg__actions">
           <CopyButton text={result.answer} />
-          <button className="msg-action-btn" onClick={onRegenerate} aria-label="Regenerate answer">
-            <RotateCcw size={13} /> Regenerate
-          </button>
+          {onRegenerate && (
+            <button
+              type="button"
+              className="msg-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRegenerate();
+              }}
+              aria-label="Regenerate answer"
+            >
+              <RotateCcw size={13} /> Regenerate
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -673,52 +754,197 @@ function QuerySkeleton() {
   );
 }
 
-/* ── Main page ──────────────────────────────────────────────── */
-export default function QueryPage() {
-  const location  = useLocation();
+/* ── Panel Layout Validation & Error Boundary ───────────────── */
+const PANEL_STORAGE_KEY = 'react-resizable-panels:rag-query-panels';
 
-  // Conversation history
-  const [messages, setMessages] = useState([]); // {type:'user'|'assistant', content, result?}
-  const [query, setQuery]       = useState('');
-  const [provider, setProvider] = useState('groq');
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState(null);
+function getValidatedPanelLayout() {
+  try {
+    for (const key of [PANEL_STORAGE_KEY, 'rag-query-panels']) {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length >= 2) {
+        const left = Number(parsed[0]);
+        const right = Number(parsed[1]);
+        if (left >= 30 && right >= 20 && !Number.isNaN(left) && !Number.isNaN(right)) {
+          return { 'conv-panel': left, 'evidence-panel': right };
+        }
+      } else if (parsed && typeof parsed === 'object') {
+        const values = Object.values(parsed).map(Number);
+        if (values.length >= 2) {
+          const [left, right] = values;
+          if (left >= 30 && right >= 20 && !Number.isNaN(left) && !Number.isNaN(right)) {
+            return parsed;
+          }
+        }
+      }
+      // Stored layout is 0, below minimum, or corrupted -> ignore and remove
+      localStorage.removeItem(key);
+    }
+  } catch {
+    try {
+      localStorage.removeItem(PANEL_STORAGE_KEY);
+      localStorage.removeItem('rag-query-panels');
+    } catch {}
+  }
+  return null;
+}
+
+class QueryErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('QueryErrorBoundary caught:', error, info);
+  }
+
+  handleResetView = () => {
+    try {
+      localStorage.removeItem(PANEL_STORAGE_KEY);
+      localStorage.removeItem('rag-query-panels');
+    } catch {}
+    this.props.onResetView?.();
+    this.setState({ hasError: false, error: null });
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="query-view-fallback">
+          <div className="query-view-fallback__card">
+            <div className="query-view-fallback__icon">
+              <AlertTriangle size={30} />
+            </div>
+            <h2>Unable to display query workspace</h2>
+            <p>
+              An unexpected display issue occurred in this view. Your conversations and messages are safe.
+            </p>
+            <Button
+              variant="primary"
+              onClick={this.handleResetView}
+              icon={<RotateCcw size={14} />}
+            >
+              Reset this view
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* ── Main query workspace inner component ───────────────────── */
+function QueryPageInner() {
+  const location = useLocation();
+
+  const {
+    activeTab: contextActiveTab,
+    tabs,
+    activeTabId,
+    setActive,
+    updateTab,
+    sendMessage,
+    clearTab,
+    markMessageRevealed,
+  } = useChat();
+
+  // Safeguard: QueryPage must never render nothing. Fall back to default tab if missing.
+  const activeTab = useMemo(() => {
+    if (contextActiveTab && contextActiveTab.id) return contextActiveTab;
+    const found = tabs.find((t) => t.id === activeTabId);
+    if (found) return found;
+    const defaultTab = tabs.find((t) => t.id === 'default');
+    if (defaultTab) return defaultTab;
+    return tabs[0] || createDefaultTab();
+  }, [contextActiveTab, tabs, activeTabId]);
+
+  // Correct activeTabId in the store if pointing to missing tab
+  useEffect(() => {
+    if (!tabs.some((t) => t.id === activeTabId)) {
+      setActive('default');
+    }
+  }, [tabs, activeTabId, setActive]);
+
+  const messages = useMemo(() => activeTab.messages || [], [activeTab.messages]);
+  const query = activeTab.draft || '';
+  const provider = activeTab.model || 'groq';
+  const selectedDocs = activeTab.docIds || [];
+  const evidenceTab = activeTab.evidenceTab || 'sources';
+
+  // In-flight query in this tab
+  const isTabLoading = messages.some((m) => m.pending);
 
   // Documents
-  const [documents, setDocuments]       = useState([]);
-  const [selectedDocs, setSelectedDocs] = useState([]);
-  const [docsLoading, setDocsLoading]   = useState(true);
+  const [documents, setDocuments] = useState([]);
+  const [docsLoading, setDocsLoading] = useState(true);
 
   // Evidence pane
-  const [evidenceTab, setEvidenceTab]   = useState('sources');
-  const [highlighted, setHighlighted]   = useState(null);
+  const [highlighted, setHighlighted] = useState(null);
 
-  const textareaRef  = useRef(null);
-  const bottomRef    = useRef(null);
+  const textareaRef = useRef(null);
+  const bottomRef = useRef(null);
+  const activeTabRef = useRef(activeTab);
 
-  // Get pre-selected doc from query string
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  // Handle URL pre-selected doc param
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const docId  = params.get('doc');
-    if (docId) setSelectedDocs([docId]);
-  }, [location.search]);
+    const docId = params.get('doc');
+    if (docId && activeTab) {
+      if (!activeTab.docIds?.includes(docId)) {
+        updateTab(activeTab.id, { docIds: [docId] });
+      }
+    }
+  }, [location.search, activeTab, updateTab]);
 
   // Load documents
-  useEffect(() => {
+  const loadDocuments = useCallback(async () => {
     setDocsLoading(true);
-    documentsAPI.list()
-      .then(res => {
-        const completed = (res.data.documents || []).filter(d => d.status === 'completed');
-        setDocuments(completed);
-      })
-      .catch(() => toast.error('Could not load documents.'))
-      .finally(() => setDocsLoading(false));
-  }, []);
+    try {
+      const res = await documentsAPI.list();
+      const completed = (res.data.documents || []).filter((d) => d.status === 'completed');
+      setDocuments(completed);
 
-  // Auto-scroll to bottom on new message
+      // Check if any filtered document was deleted
+      const currentTab = activeTabRef.current;
+      if (currentTab && currentTab.docIds && currentTab.docIds.length > 0) {
+        const validDocs = currentTab.docIds.filter((id) =>
+          completed.some((d) => d.document_id === id)
+        );
+        if (validDocs.length < currentTab.docIds.length) {
+          updateTab(currentTab.id, {
+            docIds: validDocs,
+            docNotice: 'A filtered document was deleted and removed from this chat.',
+          });
+        }
+      }
+    } catch {
+      toast.error('Could not load documents.');
+    } finally {
+      setDocsLoading(false);
+    }
+  }, [updateTab]);
+
+  useEffect(() => {
+    loadDocuments();
+    window.addEventListener('focus', loadDocuments);
+    return () => window.removeEventListener('focus', loadDocuments);
+  }, [loadDocuments]);
+
+  // Auto-scroll to bottom on new message or loading
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  }, [messages, isTabLoading]);
 
   // Cleanup page blob URLs on unmount
   useEffect(() => {
@@ -729,7 +955,7 @@ export default function QueryPage() {
 
   // Auto-resize textarea
   const handleQueryChange = (e) => {
-    setQuery(e.target.value);
+    updateTab(activeTab.id, { draft: e.target.value });
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = 'auto';
@@ -737,53 +963,47 @@ export default function QueryPage() {
     }
   };
 
-  const toggleDoc = useCallback((docId) => {
-    setSelectedDocs(prev =>
-      prev.includes(docId) ? prev.filter(id => id !== docId) : [...prev, docId]
-    );
-  }, []);
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.style.height = 'auto';
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    }
+  }, [activeTab.draft]);
 
-  // Latest result (from last assistant message)
-  const lastResult = useMemo(() => {
-    const assistantMsgs = messages.filter(m => m.type === 'assistant');
-    return assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1].result : null;
-  }, [messages]);
+  const toggleDoc = useCallback(
+    (docId) => {
+      const current = activeTab.docIds || [];
+      const updated = current.includes(docId)
+        ? current.filter((id) => id !== docId)
+        : [...current, docId];
+      updateTab(activeTab.id, { docIds: updated });
+    },
+    [activeTab.id, activeTab.docIds, updateTab]
+  );
 
+  // Active result for evidence panel
+  const activeResultMsg = useMemo(() => {
+    const msgs = activeTab.messages || [];
+    if (activeTab.activeMessageId) {
+      const found = msgs.find((m) => m.id === activeTab.activeMessageId && m.result);
+      if (found) return found;
+    }
+    const assistantMsgs = msgs.filter((m) => m.type === 'assistant' && m.result);
+    return assistantMsgs.length > 0 ? assistantMsgs[assistantMsgs.length - 1] : null;
+  }, [activeTab.messages, activeTab.activeMessageId]);
+
+  const lastResult = activeResultMsg?.result || null;
   const sourcesForCurrentResult = lastResult?.sources || [];
-  const tablesInSources  = sourcesForCurrentResult.filter(s => s.chunk_type === 'table');
-  const imagesInSources  = sourcesForCurrentResult.filter(s => s.chunk_type === 'figure');
+  const tablesInSources = sourcesForCurrentResult.filter((s) => s.chunk_type === 'table');
+  const imagesInSources = sourcesForCurrentResult.filter((s) => s.chunk_type === 'figure');
 
   /* Submit */
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e?.preventDefault();
-    const q = query.trim();
-    if (!q || loading) return;
-
-    setMessages(prev => [...prev, { type: 'user', content: q }]);
-    setQuery('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await queryAPI.query({
-        query:        q,
-        document_ids: selectedDocs.length > 0 ? selectedDocs : null,
-        llm_provider: provider,
-      });
-      setMessages(prev => [...prev, { type: 'assistant', content: res.data.answer, result: res.data }]);
-      setEvidenceTab('sources');
-    } catch (err) {
-      const status = err.response?.status;
-      const detail = err.response?.data?.detail || err.message || 'Query failed.';
-      let msg = detail;
-      if (status === 429) msg = 'Rate limit reached — wait a moment and try again.';
-      else if (status >= 500) msg = `Server error: ${detail}`;
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
+    const q = (activeTab.draft || '').trim();
+    if (!q || isTabLoading) return;
+    sendMessage({ tabId: activeTab.id, queryText: q });
   };
 
   const handleKeyDown = (e) => {
@@ -791,7 +1011,7 @@ export default function QueryPage() {
   };
 
   const handleCitationClick = (num) => {
-    setEvidenceTab('sources');
+    updateTab(activeTab.id, { evidenceTab: 'sources' });
     setHighlighted(num);
     setTimeout(() => {
       const el = document.getElementById(`source-${num}`);
@@ -806,20 +1026,30 @@ export default function QueryPage() {
     }, 100);
   };
 
-  const handleRegenerate = () => {
-    const lastUser = [...messages].reverse().find(m => m.type === 'user');
-    if (lastUser) {
-      setMessages(prev => prev.slice(0, -1)); // remove last assistant msg
-      setQuery(lastUser.content);
+  const handleRegenerate = (assistantMsgId) => {
+    const msgs = activeTab.messages || [];
+    const targetIdx = assistantMsgId
+      ? msgs.findIndex((m) => m.id === assistantMsgId)
+      : msgs.findLastIndex((m) => m.type === 'assistant');
+    if (targetIdx === -1) return;
+
+    const userMsg = [...msgs.slice(0, targetIdx)].reverse().find((m) => m.type === 'user');
+    if (userMsg) {
+      sendMessage({
+        tabId: activeTab.id,
+        queryText: userMsg.content,
+        regenerateMessageId: msgs[targetIdx].id,
+      });
     }
   };
 
   const clearConversation = () => {
-    setMessages([]);
-    setError(null);
+    clearTab(activeTab.id);
   };
 
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 768);
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth <= 768
+  );
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -827,22 +1057,52 @@ export default function QueryPage() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  const [persistedLayout] = useState(() => getValidatedPanelLayout());
+
+  const handleLayoutChanged = useCallback((layout) => {
+    if (!layout) return;
+    const values = Object.values(layout).map(Number);
+    if (values.length >= 2) {
+      const [left, right] = values;
+      if (left >= 30 && right >= 20 && !Number.isNaN(left) && !Number.isNaN(right)) {
+        try {
+          localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(layout));
+        } catch {}
+      }
+    }
+  }, []);
+
   const evidenceTabs = [
-    { value: 'sources', label: 'Sources',   count: sourcesForCurrentResult.length },
-    { value: 'tables',  label: 'Tables',    count: tablesInSources.length },
-    { value: 'images',  label: 'Images',    count: imagesInSources.length },
-    { value: 'trace',   label: 'Trace' },
+    { value: 'sources', label: 'Sources', count: sourcesForCurrentResult.length },
+    { value: 'tables', label: 'Tables', count: tablesInSources.length },
+    { value: 'images', label: 'Images', count: imagesInSources.length },
+    { value: 'trace', label: 'Trace' },
   ];
 
   return (
     <div className="query-page">
-      <Group orientation={isMobile ? 'vertical' : 'horizontal'} className="query-panels">
+      <Group
+        orientation={isMobile ? 'vertical' : 'horizontal'}
+        className="query-panels"
+        defaultLayout={persistedLayout || undefined}
+        onLayoutChanged={handleLayoutChanged}
+      >
         {/* ── Left: Conversation ──────────────────────────────── */}
-        <Panel defaultSize="60%" minSize="35%" className="conv-panel">
+        <Panel id="conv-panel" defaultSize="60%" minSize="35%" className="conv-panel">
           <div className="conv-panel__inner">
+            {/* Chrome-style Tab Strip */}
+            <ChatTabStrip />
+
             {/* Conversation thread */}
-            <div className="conv-thread" aria-live="polite" aria-label="Conversation">
-              {messages.length === 0 && !loading && (
+            <div
+              className="conv-thread"
+              role="tabpanel"
+              id={`tabpanel-${activeTab.id}`}
+              aria-labelledby={`tab-${activeTab.id}`}
+              aria-live="polite"
+              aria-label={`Conversation - ${activeTab.title}`}
+            >
+              {messages.length === 0 && !isTabLoading && (
                 <div className="conv-empty">
                   <EmptyState
                     icon={<MessageSquare size={24} />}
@@ -850,8 +1110,16 @@ export default function QueryPage() {
                     description="Query your documents using multimodal RAG — text, tables, figures, and images."
                   />
                   <div className="suggested-prompts">
-                    {SUGGESTED_PROMPTS.map(p => (
-                      <button key={p} className="suggested-prompt" onClick={() => { setQuery(p); textareaRef.current?.focus(); }}>
+                    {SUGGESTED_PROMPTS.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className="suggested-prompt"
+                        onClick={() => {
+                          updateTab(activeTab.id, { draft: p });
+                          textareaRef.current?.focus();
+                        }}
+                      >
                         <Sparkles size={12} />
                         {p}
                       </button>
@@ -861,41 +1129,54 @@ export default function QueryPage() {
               )}
 
               {messages.map((msg, i) => {
-                if (msg.type === 'user') return <UserBubble key={i} text={msg.content} />;
+                if (msg.type === 'user') return <UserBubble key={msg.id || i} text={msg.content} />;
                 return (
                   <AssistantBubble
-                    key={i}
-                    result={msg.result}
+                    key={msg.id || i}
+                    msg={msg}
+                    isActiveEvidence={activeResultMsg?.id === msg.id}
+                    onSelectEvidence={() =>
+                      updateTab(activeTab.id, { activeMessageId: msg.id })
+                    }
                     onCitationClick={handleCitationClick}
-                    onRegenerate={i === messages.length - 1 ? handleRegenerate : undefined}
+                    onRegenerate={() => handleRegenerate(msg.id)}
+                    onRevealed={() => markMessageRevealed(activeTab.id, msg.id)}
                   />
                 );
               })}
-
-              {loading && <QuerySkeleton />}
-
-              {error && (
-                <div className="conv-error" role="alert">
-                  <AlertTriangle size={15} />
-                  {error}
-                </div>
-              )}
 
               <div ref={bottomRef} />
             </div>
 
             {/* Pinned composer */}
             <div className="composer">
+              {/* Deleted document inline notice */}
+              {activeTab.docNotice && (
+                <div className="doc-filter-notice" role="status">
+                  <Info size={13} />
+                  <span>{activeTab.docNotice}</span>
+                  <button
+                    type="button"
+                    className="doc-filter-notice__dismiss"
+                    onClick={() => updateTab(activeTab.id, { docNotice: null })}
+                    aria-label="Dismiss notice"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
               {/* Doc filter chips */}
               {!docsLoading && documents.length > 0 && (
                 <div className="composer__doc-chips">
-                  {selectedDocs.map(id => {
-                    const doc = documents.find(d => d.document_id === id);
+                  {selectedDocs.map((id) => {
+                    const doc = documents.find((d) => d.document_id === id);
                     if (!doc) return null;
                     return (
                       <span key={id} className="doc-filter-chip">
                         {doc.filename}
                         <button
+                          type="button"
                           className="doc-filter-chip__remove"
                           onClick={() => toggleDoc(id)}
                           aria-label={`Remove ${doc.filename} filter`}
@@ -909,11 +1190,15 @@ export default function QueryPage() {
                     <span className="composer__doc-hint">All documents · </span>
                   )}
                   <div className="doc-filter-dropdown">
-                    <button className="doc-filter-dropdown__btn" aria-label="Select documents to filter">
+                    <button
+                      type="button"
+                      className="doc-filter-dropdown__btn"
+                      aria-label="Select documents to filter"
+                    >
                       Filter docs <ChevronDown size={11} />
                     </button>
                     <div className="doc-filter-dropdown__menu">
-                      {documents.map(doc => (
+                      {documents.map((doc) => (
                         <label key={doc.document_id} className="doc-filter-option">
                           <input
                             type="checkbox"
@@ -939,7 +1224,7 @@ export default function QueryPage() {
                     onChange={handleQueryChange}
                     onKeyDown={handleKeyDown}
                     rows={1}
-                    disabled={loading}
+                    disabled={isTabLoading}
                     aria-label="Query input"
                   />
                 </div>
@@ -948,29 +1233,38 @@ export default function QueryPage() {
                     <select
                       className="model-select"
                       value={provider}
-                      onChange={e => setProvider(e.target.value)}
-                      disabled={loading}
+                      onChange={(e) => updateTab(activeTab.id, { model: e.target.value })}
+                      disabled={isTabLoading}
                       aria-label="Select model"
                     >
-                      {PROVIDER_OPTIONS.map(o => (
-                        <option key={o.value} value={o.value}>{o.provider} — {o.label}</option>
+                      {PROVIDER_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.provider} — {o.label}
+                        </option>
                       ))}
                     </select>
                     {messages.length > 0 && (
-                      <button type="button" className="clear-btn" onClick={clearConversation} aria-label="Clear conversation">
+                      <button
+                        type="button"
+                        className="clear-btn"
+                        onClick={clearConversation}
+                        aria-label="Clear conversation"
+                      >
                         Clear
                       </button>
                     )}
                   </div>
                   <div className="composer__footer-right">
-                    <span className="composer__hint"><Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd></span>
+                    <span className="composer__hint">
+                      <Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd>
+                    </span>
                     <Button
                       id="query-submit-btn"
                       type="submit"
                       variant="primary"
                       size="md"
-                      loading={loading}
-                      disabled={!query.trim() || loading}
+                      loading={isTabLoading}
+                      disabled={!query.trim() || isTabLoading}
                       icon={<Send size={14} />}
                     >
                       Ask
@@ -985,19 +1279,29 @@ export default function QueryPage() {
         <Separator className="panel-resize-handle" />
 
         {/* ── Right: Evidence ─────────────────────────────────── */}
-        <Panel defaultSize="40%" minSize="25%" className="evidence-panel">
+        <Panel id="evidence-panel" defaultSize="40%" minSize="25%" className="evidence-panel">
           <div className="evidence-panel__inner">
             <div className="evidence-panel__header">
               <Tabs
                 tabs={evidenceTabs}
                 active={evidenceTab}
-                onChange={setEvidenceTab}
+                onChange={(tab) => updateTab(activeTab.id, { evidenceTab: tab })}
               />
             </div>
 
             <div className="evidence-panel__body">
-              {/* No result yet */}
-              {!lastResult && !loading && (
+              {/* While a query is pending: show skeleton state in evidence panel */}
+              {isTabLoading && (
+                <div className="evidence-skeleton">
+                  <div className="skeleton" style={{ height: '22px', width: '45%', borderRadius: '6px' }} />
+                  <div className="skeleton" style={{ height: '100px', borderRadius: '10px' }} />
+                  <div className="skeleton" style={{ height: '100px', borderRadius: '10px' }} />
+                  <div className="skeleton" style={{ height: '36px', width: '65%', borderRadius: '6px' }} />
+                </div>
+              )}
+
+              {/* No result yet and not loading */}
+              {!lastResult && !isTabLoading && (
                 <EmptyState
                   icon={<Activity size={22} />}
                   title="Evidence panel"
@@ -1009,7 +1313,11 @@ export default function QueryPage() {
               {lastResult && evidenceTab === 'sources' && (
                 <div className="sources-list">
                   {sourcesForCurrentResult.length === 0 ? (
-                    <EmptyState icon={<FileText size={20} />} title="No sources" description="No matching chunks were found for this query." />
+                    <EmptyState
+                      icon={<FileText size={20} />}
+                      title="No sources"
+                      description="No matching chunks were found for this query."
+                    />
                   ) : (
                     sourcesForCurrentResult.map((src, i) => (
                       <SourceCard
@@ -1030,12 +1338,18 @@ export default function QueryPage() {
               {lastResult && evidenceTab === 'tables' && (
                 <div className="tables-list">
                   {tablesInSources.length === 0 ? (
-                    <EmptyState icon={<Table2 size={20} />} title="No tables" description="No table chunks were retrieved for this query." />
+                    <EmptyState
+                      icon={<Table2 size={20} />}
+                      title="No tables"
+                      description="No table chunks were retrieved for this query."
+                    />
                   ) : (
-                    tablesInSources.map(src => (
+                    tablesInSources.map((src) => (
                       <div key={src.chunk_id} className="table-chunk">
                         <div className="table-chunk__header">
-                          <span>Table from {src.filename} · p.{src.page + 1}</span>
+                          <span>
+                            Table from {src.filename} · p.{src.page + 1}
+                          </span>
                           {(() => {
                             const rel = formatRelevance(src.relevance_score);
                             return (
@@ -1049,7 +1363,9 @@ export default function QueryPage() {
                           })()}
                         </div>
                         <div className="table-chunk__content">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{src.text_preview}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {src.text_preview}
+                          </ReactMarkdown>
                         </div>
                       </div>
                     ))
@@ -1061,29 +1377,56 @@ export default function QueryPage() {
               {lastResult && evidenceTab === 'images' && (
                 <div className="images-list">
                   {imagesInSources.length === 0 ? (
-                    <EmptyState icon={<Image size={20} />} title="No images" description="No figure chunks were retrieved for this query." />
+                    <EmptyState
+                      icon={<Image size={20} />}
+                      title="No images"
+                      description="No figure chunks were retrieved for this query."
+                    />
                   ) : (
-                    imagesInSources.map(src => (
+                    imagesInSources.map((src) => (
                       <div key={src.chunk_id} className="image-chunk">
                         <div className="image-chunk__header">
                           Figure from {src.filename} · p.{src.page + 1}
                         </div>
                         <div className="image-chunk__content">
                           {src.text_preview && (
-                            <p className="image-chunk__caption">{src.text_preview.slice(0, 200)}</p>
+                            <p className="image-chunk__caption">
+                              {src.text_preview.slice(0, 200)}
+                            </p>
                           )}
                           {src.bbox?.length === 4 && (
                             <div className="bbox-mini">
                               <svg viewBox="0 0 100 141" className="bbox-mini__svg">
-                                <rect x="0" y="0" width="100" height="141" fill="var(--bg-elevated)" rx="2" />
-                                {[18,26,34,42,50,58,66,74,82,90,98,106,114,122].map(y => (
-                                  <line key={y} x1="8" y1={y} x2="92" y2={y} stroke="var(--border)" strokeWidth="0.8" />
-                                ))}
                                 <rect
-                                  x={src.bbox[0]*100} y={src.bbox[1]*141}
-                                  width={Math.max(src.bbox[2]-src.bbox[0],0.02)*100}
-                                  height={Math.max(src.bbox[3]-src.bbox[1],0.02)*141}
-                                  fill="rgba(255,181,71,0.2)" stroke="var(--warn)" strokeWidth="1.5" rx="1"
+                                  x="0"
+                                  y="0"
+                                  width="100"
+                                  height="141"
+                                  fill="var(--bg-elevated)"
+                                  rx="2"
+                                />
+                                {[18, 26, 34, 42, 50, 58, 66, 74, 82, 90, 98, 106, 114, 122].map(
+                                  (y) => (
+                                    <line
+                                      key={y}
+                                      x1="8"
+                                      y1={y}
+                                      x2="92"
+                                      y2={y}
+                                      stroke="var(--border)"
+                                      strokeWidth="0.8"
+                                    />
+                                  )
+                                )}
+                                <rect
+                                  x={src.bbox[0] * 100}
+                                  y={src.bbox[1] * 141}
+                                  width={Math.max(src.bbox[2] - src.bbox[0], 0.02) * 100}
+                                  height={Math.max(src.bbox[3] - src.bbox[1], 0.02) * 141}
+                                  fill="rgba(255,181,71,0.2)"
+                                  stroke="var(--warn)"
+                                  strokeWidth="1.5"
+                                  rx="1"
                                 />
                               </svg>
                               <span className="bbox-mini__label">Page {src.page + 1}</span>
@@ -1101,13 +1444,33 @@ export default function QueryPage() {
                 <TracePanel
                   latency={lastResult.latency}
                   tokenUsage={lastResult.token_usage}
-                  costUsd={lastResult.cost_usd}
-                />
-              )}
+                    costUsd={lastResult.cost_usd}
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        </Panel>
-      </Group>
-    </div>
+          </Panel>
+        </Group>
+      </div>
+    );
+  }
+
+export default function QueryPage() {
+  const { setActive } = useChat();
+  const [viewKey, setViewKey] = useState(0);
+
+  const handleResetView = useCallback(() => {
+    try {
+      localStorage.removeItem(PANEL_STORAGE_KEY);
+      localStorage.removeItem('rag-query-panels');
+    } catch {}
+    setActive('default');
+    setViewKey((k) => k + 1);
+  }, [setActive]);
+
+  return (
+    <QueryErrorBoundary onResetView={handleResetView}>
+      <QueryPageInner key={viewKey} onResetView={handleResetView} />
+    </QueryErrorBoundary>
   );
 }

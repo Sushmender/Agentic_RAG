@@ -94,7 +94,8 @@ export const jobsAPI = {
 // ── Query endpoint ─────────────────────────────────────────────────────────────
 
 export const queryAPI = {
-  query: (queryRequest) => api.post('/query', queryRequest),
+  query: (queryRequest, config) =>
+    api.post('/query', queryRequest, { timeout: 90000, ...config }),
 };
 
 // ── Health check ───────────────────────────────────────────────────────────────

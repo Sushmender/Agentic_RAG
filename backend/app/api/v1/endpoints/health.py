@@ -5,11 +5,15 @@ Returns status of backend, ChromaDB, and Redis.
 """
 from __future__ import annotations
 
+import os
+import uuid
 from fastapi import APIRouter
 
 from app.db import chromadb_client, redis_client
 
 router = APIRouter(tags=["Health"])
+
+BOOT_ID: str = os.getenv("APP_BOOT_ID") or str(uuid.uuid4())
 
 
 @router.get(
@@ -27,6 +31,7 @@ async def health_check() -> dict:
     return {
         "status": status,
         "version": "0.1.0",
+        "boot_id": BOOT_ID,
         "components": {
             "chromadb": "ok" if chroma_ok else "error",
             "redis": "ok" if redis_ok else "error",

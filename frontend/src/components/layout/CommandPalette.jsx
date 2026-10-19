@@ -10,12 +10,13 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, MessageSquare, BarChart3, FlaskConical,
-  LogOut, Plus, Search
+  LogOut, Plus, Search, X, ArrowRight, ArrowLeft, Edit3,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useChat } from '../../context/ChatContext';
 import './CommandPalette.css';
 
-const COMMANDS = [
+const BASE_COMMANDS = [
   {
     group: 'Navigate',
     items: [
@@ -23,6 +24,73 @@ const COMMANDS = [
       { id: 'go-query',     label: 'Go to Query',     icon: MessageSquare, shortcut: 'G Q', action: (nav) => nav('/query') },
       { id: 'go-metrics',   label: 'Go to Metrics',   icon: BarChart3, shortcut: 'G M', action: (nav) => nav('/metrics') },
       { id: 'go-eval',      label: 'Go to Evaluation',icon: FlaskConical, shortcut: 'G E', action: (nav) => nav('/evaluation') },
+    ],
+  },
+  {
+    group: 'Chat Tabs',
+    items: [
+      {
+        id: 'new-chat',
+        label: 'New chat',
+        icon: Plus,
+        shortcut: 'Alt N',
+        action: (nav, logout, chat) => {
+          chat.newTab();
+          nav('/query');
+          setTimeout(() => document.getElementById('query-input')?.focus(), 50);
+        },
+      },
+      {
+        id: 'close-chat',
+        label: 'Close chat',
+        icon: X,
+        shortcut: 'Alt W',
+        action: (nav, logout, chat) => {
+          if (chat.activeTabId !== 'default') {
+            chat.closeTab(chat.activeTabId);
+          }
+        },
+      },
+      {
+        id: 'next-chat',
+        label: 'Next chat',
+        icon: ArrowRight,
+        shortcut: 'Alt →',
+        action: (nav, logout, chat) => {
+          const idx = chat.tabs.findIndex((t) => t.id === chat.activeTabId);
+          const nextIdx = (idx + 1) % chat.tabs.length;
+          chat.setActive(chat.tabs[nextIdx].id);
+          nav('/query');
+        },
+      },
+      {
+        id: 'prev-chat',
+        label: 'Previous chat',
+        icon: ArrowLeft,
+        shortcut: 'Alt ←',
+        action: (nav, logout, chat) => {
+          const idx = chat.tabs.findIndex((t) => t.id === chat.activeTabId);
+          const prevIdx = (idx - 1 + chat.tabs.length) % chat.tabs.length;
+          chat.setActive(chat.tabs[prevIdx].id);
+          nav('/query');
+        },
+      },
+      {
+        id: 'rename-chat',
+        label: 'Rename chat',
+        icon: Edit3,
+        shortcut: 'F2',
+        action: (nav, logout, chat) => {
+          nav('/query');
+          setTimeout(() => {
+            window.dispatchEvent(
+              new CustomEvent('chat:start-rename', {
+                detail: { tabId: chat.activeTabId },
+              })
+            );
+          }, 50);
+        },
+      },
     ],
   },
   {
@@ -37,6 +105,7 @@ const COMMANDS = [
 export function CommandPalette({ open, onClose }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const chat = useChat();
   const [search, setSearch] = useState('');
 
   useEffect(() => {
@@ -44,9 +113,9 @@ export function CommandPalette({ open, onClose }) {
   }, [open]);
 
   const runCommand = useCallback((action) => {
-    action(navigate, logout);
+    action(navigate, logout, chat);
     onClose();
-  }, [navigate, logout, onClose]);
+  }, [navigate, logout, chat, onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,7 +171,7 @@ export function CommandPalette({ open, onClose }) {
                   No commands found for "{search}"
                 </Command.Empty>
 
-                {COMMANDS.map((group) => (
+                {BASE_COMMANDS.map((group) => (
                   <Command.Group key={group.group} heading={group.group} className="cmd-group">
                     {group.items.map((item) => (
                       <Command.Item

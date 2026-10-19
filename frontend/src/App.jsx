@@ -11,6 +11,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ChatProvider } from './context/ChatContext';
 import AppShell from './components/layout/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -89,18 +90,20 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <BrowserRouter>
-          <AppRoutes />
-          <Toaster
-            position="bottom-right"
-            theme="dark"
-            closeButton
-            offset="calc(var(--statusbar-height) + 16px)"
-            toastOptions={{
-              duration: 4000,
-            }}
-          />
-        </BrowserRouter>
+        <ChatProvider>
+          <BrowserRouter>
+            <AppRoutes />
+            <Toaster
+              position="bottom-right"
+              theme="dark"
+              closeButton
+              offset="calc(var(--statusbar-height) + 16px)"
+              toastOptions={{
+                duration: 4000,
+              }}
+            />
+          </BrowserRouter>
+        </ChatProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

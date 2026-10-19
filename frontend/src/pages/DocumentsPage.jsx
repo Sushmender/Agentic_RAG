@@ -27,6 +27,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { Skeleton } from '../components/ui/Skeleton';
 import { EmptyState } from '../components/ui/EmptyState';
+import { useChat } from '../context/ChatContext';
 import './DocumentsPage.css';
 
 /* ── Constants ─────────────────────────────────────────────── */
@@ -385,6 +386,7 @@ function UploadZone({ onUpload, uploading, uploadProgress }) {
 /* ── Main page ──────────────────────────────────────────────── */
 export default function DocumentsPage() {
   const navigate        = useNavigate();
+  const { activeTab, updateTab, newTab } = useChat();
   const [documents, setDocuments]     = useState([]);
   const [uploading, setUploading]     = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -472,7 +474,24 @@ export default function DocumentsPage() {
   };
 
   /* Navigate to query */
-  const handleQuery = (documentId) => navigate(`/query?doc=${documentId}`);
+  const handleQuery = (documentId) => {
+    const doc = documents.find((d) => d.document_id === documentId);
+    const docTitle = doc?.filename || 'Document';
+
+    if (!activeTab || (activeTab.messages || []).length === 0) {
+      updateTab(activeTab ? activeTab.id : 'default', {
+        docIds: [documentId],
+        title: activeTab?.title === 'New chat' ? docTitle : activeTab?.title,
+      });
+    } else {
+      newTab({
+        title: docTitle,
+        docIds: [documentId],
+        activate: true,
+      });
+    }
+    navigate('/query');
+  };
 
   /* Delete with undo */
   const confirmDelete = async () => {

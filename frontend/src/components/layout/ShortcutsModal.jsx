@@ -26,6 +26,16 @@ const SHORTCUTS = [
     ],
   },
   {
+    group: 'Chat Tabs',
+    items: [
+      { keys: ['Alt', 'N'], label: 'New chat tab' },
+      { keys: ['Alt', 'W'], label: 'Close current chat tab' },
+      { keys: ['Alt', '1–9'], label: 'Jump to chat tab 1–9' },
+      { keys: ['Alt', '← / →'], label: 'Switch previous / next chat' },
+      { keys: ['F2'], label: 'Rename active chat tab' },
+    ],
+  },
+  {
     group: 'Dialogs',
     items: [
       { keys: ['ESC'], label: 'Close dialog / modal' },
