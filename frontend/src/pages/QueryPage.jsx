@@ -694,9 +694,15 @@ function SourceCard({ source, rank, isHighlighted, allSources = [], answer = '',
 }
 
 /* ── Trace panel ────────────────────────────────────────────── */
-function TracePanel({ latency, tokenUsage, costUsd }) {
+function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit }) {
   const stages = [
-    { label: 'Embedding',  ms: latency?.query_embed_ms, color: 'var(--color-embed)' },
+    {
+      label: 'Embedding',
+      ms: latency?.query_embed_ms,
+      color: 'var(--color-embed)',
+      attempts: embedAttempts,
+      cached: embedCacheHit,
+    },
     { label: 'Retrieval',  ms: latency?.retrieval_ms,   color: 'var(--color-retrieve)' },
     { label: 'Reranking',  ms: latency?.reranking_ms,  color: 'var(--color-rerank)' },
     { label: 'LLM',        ms: latency?.llm_ms,         color: 'var(--color-llm)' },
@@ -708,11 +714,43 @@ function TracePanel({ latency, tokenUsage, costUsd }) {
     <div className="trace-panel">
       <div className="trace-section">
         <h4 className="trace-section__title">Latency Breakdown</h4>
-        {stages.map(({ label, ms, color }) => {
+        {stages.map(({ label, ms, color, attempts, cached }) => {
           const pct = Math.min(((ms || 0) / maxMs) * 100, 100);
           return (
             <div key={label} className="trace-bar-row">
-              <span className="trace-bar-label">{label}</span>
+              <span className="trace-bar-label" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                {label}
+                {attempts != null && attempts > 1 && (
+                  <span
+                    className="trace-attempt-badge"
+                    style={{
+                      fontSize: '10px',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      background: 'rgba(234, 179, 8, 0.15)',
+                      color: 'var(--warn, #eab308)',
+                      border: '1px solid rgba(234, 179, 8, 0.3)',
+                    }}
+                  >
+                    {attempts} attempts
+                  </span>
+                )}
+                {cached === true && (
+                  <span
+                    className="trace-cached-chip"
+                    style={{
+                      fontSize: '10px',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      background: 'rgba(45, 226, 166, 0.12)',
+                      color: 'var(--accent, #2de2a6)',
+                      border: '1px solid rgba(45, 226, 166, 0.25)',
+                    }}
+                  >
+                    cached
+                  </span>
+                )}
+              </span>
               <div className="trace-bar-track">
                 <div className="trace-bar-fill" style={{ width: `${pct}%`, background: color }} />
               </div>
@@ -744,12 +782,34 @@ function TracePanel({ latency, tokenUsage, costUsd }) {
 
 /* ── Query skeleton ─────────────────────────────────────────── */
 function QuerySkeleton() {
+  const [takingLonger, setTakingLonger] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setTakingLonger(true);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="query-skeleton">
       <div className="skeleton" style={{ height: '24px', width: '40%', marginBottom: '12px', borderRadius: '6px' }} />
       <div className="skeleton" style={{ height: '120px', borderRadius: '10px', marginBottom: '8px' }} />
       <div className="skeleton" style={{ height: '16px', width: '70%', borderRadius: '6px', marginBottom: '4px' }} />
       <div className="skeleton" style={{ height: '16px', width: '50%', borderRadius: '6px' }} />
+      {takingLonger && (
+        <div
+          className="query-skeleton__longer"
+          style={{
+            fontSize: '12px',
+            color: 'var(--text-muted, #8a94ad)',
+            marginTop: '8px',
+            fontStyle: 'italic',
+          }}
+        >
+          Taking longer than usual…
+        </div>
+      )}
     </div>
   );
 }
@@ -816,7 +876,7 @@ class QueryErrorBoundary extends Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="query-view-fallback">
+        <div className="query-view-fallback" style={{ display: 'flex', minHeight: '320px', width: '100%' }}>
           <div className="query-view-fallback__card">
             <div className="query-view-fallback__icon">
               <AlertTriangle size={30} />
@@ -1059,7 +1119,16 @@ function QueryPageInner() {
 
   const [persistedLayout] = useState(() => getValidatedPanelLayout());
 
+  const isMountedRef = useRef(false);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const handleLayoutChanged = useCallback((layout) => {
+    if (!isMountedRef.current) return;
     if (!layout) return;
     const values = Object.values(layout).map(Number);
     if (values.length >= 2) {
@@ -1082,6 +1151,7 @@ function QueryPageInner() {
   return (
     <div className="query-page">
       <Group
+        id="query-workspace-panels"
         orientation={isMobile ? 'vertical' : 'horizontal'}
         className="query-panels"
         defaultLayout={persistedLayout || undefined}
@@ -1444,8 +1514,10 @@ function QueryPageInner() {
                 <TracePanel
                   latency={lastResult.latency}
                   tokenUsage={lastResult.token_usage}
-                    costUsd={lastResult.cost_usd}
-                  />
+                  costUsd={lastResult.cost_usd}
+                  embedAttempts={lastResult.embed_attempts}
+                  embedCacheHit={lastResult.embed_cache_hit}
+                />
                 )}
               </div>
             </div>
@@ -1458,6 +1530,8 @@ function QueryPageInner() {
 export default function QueryPage() {
   const { setActive } = useChat();
   const [viewKey, setViewKey] = useState(0);
+  const containerRef = useRef(null);
+  const remountAttemptedRef = useRef(false);
 
   const handleResetView = useCallback(() => {
     try {
@@ -1468,9 +1542,55 @@ export default function QueryPage() {
     setViewKey((k) => k + 1);
   }, [setActive]);
 
+
+  // STEP 3: Safety net: if the Query page root has zero height or width, or computed opacity 0,
+  // 800 ms after mount in production, force a one-time remount of the content (key bump) and log a console.warn.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (remountAttemptedRef.current) return;
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      const parent = el.closest('.shell__page') || el.parentElement;
+      const parentStyle = parent ? window.getComputedStyle(parent) : null;
+
+      const isZeroSize = rect.width === 0 || rect.height === 0;
+      const isHiddenOpacity = style.opacity === '0' || parentStyle?.opacity === '0';
+      const isNotDisplayed = style.display === 'none' || parentStyle?.display === 'none';
+
+      if (isZeroSize || isHiddenOpacity || isNotDisplayed) {
+        console.warn(
+          '[QueryPage] Safety net triggered: zero dimensions or opacity 0 detected after 800ms. Forcing remount.',
+          { rect: { width: rect.width, height: rect.height }, opacity: style.opacity, parentOpacity: parentStyle?.opacity }
+        );
+        if (parent && parentStyle?.opacity === '0') {
+          parent.style.opacity = '1';
+        }
+        remountAttemptedRef.current = true;
+        setViewKey((k) => k + 1);
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [viewKey]);
+
   return (
-    <QueryErrorBoundary onResetView={handleResetView}>
-      <QueryPageInner key={viewKey} onResetView={handleResetView} />
-    </QueryErrorBoundary>
+    <div
+      ref={containerRef}
+      className="query-page-root"
+      style={{
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      <QueryErrorBoundary onResetView={handleResetView}>
+        <QueryPageInner key={viewKey} onResetView={handleResetView} />
+      </QueryErrorBoundary>
+    </div>
   );
 }

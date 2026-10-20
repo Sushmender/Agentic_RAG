@@ -212,18 +212,9 @@ export default function AppShell() {
 
         {/* Page outlet with route transition */}
         <main className="shell__content" id="main-content">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={location.pathname}
-              className="shell__page"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.2, ease: 'easeOut' }}
-            >
-              <Outlet />
-            </motion.div>
-          </AnimatePresence>
+          <div key={location.pathname} className="shell__page shell__page--fade-in">
+            <Outlet />
+          </div>
         </main>
 
         {/* Bottom status bar */}

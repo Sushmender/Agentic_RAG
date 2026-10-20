@@ -158,6 +158,13 @@ async def query(
     embed_start = time.monotonic()
     try:
         query_embedding = await embedding_provider.embed_query(request.query)
+        embed_meta = (
+            embedding_provider.get_last_query_meta()
+            if hasattr(embedding_provider, "get_last_query_meta")
+            else {}
+        )
+        embed_cache_hit = embed_meta.get("cache_hit", False)
+        embed_attempts = embed_meta.get("attempts", 1)
     except Exception as exc:
         log.error("Query embedding failed", error=str(exc))
         raise HTTPException(
@@ -165,7 +172,12 @@ async def query(
             detail=f"Embedding provider error: {exc}",
         ) from exc
     embed_ms = round((time.monotonic() - embed_start) * 1000, 1)
-    log.info("Query embedded", embed_ms=embed_ms)
+    log.info(
+        "Query embedded",
+        embed_ms=embed_ms,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
+    )
 
     # ── Step 3: Retrieve Top-N ────────────────────────────────────────────────
     retrieval_start = time.monotonic()
@@ -196,6 +208,8 @@ async def query(
             sources=[],
             route_type=route,
             cache_hit=False,
+            embed_cache_hit=embed_cache_hit,
+            embed_attempts=embed_attempts,
             model_used="",
             provider_used="",
             latency=LatencyBreakdown(
@@ -328,6 +342,8 @@ async def query(
         sources=sources,
         route_type=route,
         cache_hit=False,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
         model_used=llm_result.model_used,
         provider_used=llm_result.provider_used,
         latency=LatencyBreakdown(
@@ -364,6 +380,8 @@ async def query(
         query_preview=request.query[:80],
         route_type=route.value,
         cache_hit=False,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
         latency=LatencyDetail(
             total_ms=total_ms,
             embedding_ms=embed_ms,
@@ -380,6 +398,8 @@ async def query(
             model=settings.EMBEDDING_MODEL,
             provider="openrouter",
             cost_usd=0.0,
+            embed_cache_hit=embed_cache_hit,
+            embed_attempts=embed_attempts,
         ),
         llm_cost=LLMCost(
             model=llm_result.model_used,

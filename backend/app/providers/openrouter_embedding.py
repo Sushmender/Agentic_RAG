@@ -23,9 +23,12 @@ Key design decisions:
 """
 from __future__ import annotations
 
+import asyncio
+import random
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -34,11 +37,17 @@ from app.core.logging import get_logger
 from app.core.retries import with_retry
 from app.providers.base import BaseEmbeddingProvider
 from app.providers.openrouter import openrouter_client
+from app.services.embedding_cache import get_cached_embedding, set_cached_embedding
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 _ENDPOINT = "/embeddings"
+
+# Per-request telemetry context variable
+_embed_meta_var: ContextVar[dict[str, Any]] = ContextVar(
+    "embed_meta", default={"cache_hit": False, "attempts": 1}
+)
 
 
 @dataclass
@@ -67,6 +76,10 @@ class OpenRouterEmbeddingProvider(BaseEmbeddingProvider):
     def batch_size(self) -> int:
         return get_settings().EMBEDDING_BATCH_SIZE
 
+    def get_last_query_meta(self) -> dict[str, Any]:
+        """Return metadata for the most recent query embedding in this context."""
+        return _embed_meta_var.get()
+
     async def embed_passages(
         self,
         texts: List[str],
@@ -91,18 +104,144 @@ class OpenRouterEmbeddingProvider(BaseEmbeddingProvider):
 
     async def embed_query(self, text: str) -> List[float]:
         """
-        Embed a single user query for retrieval.
+        Embed a single user query for retrieval with caching, fail-fast timeout, and hedging.
         Uses input_type='query' — different representation than passage mode.
 
         Returns:
             Single embedding vector (1D list of floats).
         """
-        results = await self._embed_batched(
-            texts=[text],
-            input_type="query",
-            batch_size=1,
+        vector, _, _ = await self._embed_query_internal(text)
+        return vector
+
+    async def _embed_query_internal(self, text: str) -> tuple[List[float], bool, int]:
+        """
+        Internal implementation of query embedding:
+        1. Cache lookup (Redis + in-process LRU fallback).
+        2. On cache miss: fail-fast retries with optional request hedging.
+        3. Store result in cache upon success.
+        """
+        # 1. Check query cache
+        cached = await get_cached_embedding(self.model, text)
+        if cached is not None:
+            meta = {"cache_hit": True, "attempts": 0}
+            _embed_meta_var.set(meta)
+            return cached, True, 0
+
+        # 2. Cache miss -> provider call with fast failure and hedging
+        cfg = get_settings()
+        timeout_s = cfg.EMBED_QUERY_TIMEOUT_S
+        max_attempts = cfg.EMBED_QUERY_MAX_ATTEMPTS
+        backoff_s = cfg.EMBED_QUERY_BACKOFF_S
+        hedge_after_s = cfg.EMBED_QUERY_HEDGE_AFTER_S
+        hedge_enabled = cfg.EMBED_QUERY_HEDGE_ENABLED
+
+        last_exc: Optional[Exception] = None
+        last_attempt_ms: float = 0.0
+
+        for attempt in range(1, max_attempts + 1):
+            attempt_t0 = time.monotonic()
+            if attempt > 1:
+                exc_type = type(last_exc).__name__ if last_exc else "UnknownException"
+                status_info = (
+                    str(last_exc.response.status_code)
+                    if isinstance(last_exc, httpx.HTTPStatusError)
+                    else "timeout"
+                    if isinstance(last_exc, (httpx.TimeoutException, asyncio.TimeoutError))
+                    else str(getattr(last_exc, "status_code", "error"))
+                )
+                logger.warning(
+                    "Retrying provider call",
+                    provider="OpenRouter/Embedding",
+                    function="embed_query",
+                    attempt=attempt,
+                    exception_type=exc_type,
+                    http_status=status_info,
+                    elapsed_ms=last_attempt_ms,
+                )
+
+            try:
+                if hedge_enabled:
+                    vector = await self._call_hedged_query(text, timeout_s, hedge_after_s)
+                else:
+                    vector = await self._single_query_call(text, timeout_s)
+
+                # Store in cache upon success
+                await set_cached_embedding(self.model, text, vector)
+                meta = {"cache_hit": False, "attempts": attempt}
+                _embed_meta_var.set(meta)
+                return vector, False, attempt
+
+            except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.ConnectError, asyncio.TimeoutError) as exc:
+                last_exc = exc
+                last_attempt_ms = round((time.monotonic() - attempt_t0) * 1000, 1)
+                if attempt < max_attempts:
+                    jitter = random.uniform(0.05, 0.15)
+                    sleep_time = (backoff_s * (2 ** (attempt - 1))) + jitter
+                    await asyncio.sleep(sleep_time)
+
+        # All retry attempts exhausted
+        logger.error(
+            "All retry attempts exhausted",
+            provider="OpenRouter/Embedding",
+            function="embed_query",
+            max_attempts=max_attempts,
         )
-        return results[0]
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Query embedding failed: all retry attempts exhausted")
+
+    async def _single_query_call(self, text: str, timeout_s: float) -> List[float]:
+        """Single OpenRouter embedding API call for a query string."""
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "input": [text],
+            "input_type": "query",
+        }
+        response = await openrouter_client.post(_ENDPOINT, payload, timeout=timeout_s)
+        data = response.get("data", [])
+        if not data or "embedding" not in data[0]:
+            raise ValueError("OpenRouter embedding response missing embedding data")
+        return data[0]["embedding"]
+
+    async def _call_hedged_query(
+        self, text: str, timeout_s: float, hedge_after_s: float
+    ) -> List[float]:
+        """
+        Execute request with hedging: if task1 does not finish within hedge_after_s,
+        start task2 concurrently, return whichever completes first successfully,
+        and cancel the other. Maximum 2 requests in flight.
+        """
+        task1 = asyncio.create_task(self._single_query_call(text, timeout_s))
+
+        done, pending = await asyncio.wait([task1], timeout=hedge_after_s)
+        if done:
+            return task1.result()
+
+        logger.info(
+            "Hedging query embedding request",
+            hedge_after_s=hedge_after_s,
+            model=self.model,
+        )
+        task2 = asyncio.create_task(self._single_query_call(text, timeout_s))
+
+        done, pending = await asyncio.wait([task1, task2], return_when=asyncio.FIRST_COMPLETED)
+        first_completed = list(done)[0]
+
+        try:
+            result = first_completed.result()
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            return result
+        except Exception as first_exc:
+            # If the first finished task failed, await the remaining task
+            if pending:
+                other_task = list(pending)[0]
+                try:
+                    return await other_task
+                except Exception as second_exc:
+                    raise second_exc
+            raise first_exc
 
     async def _embed_batched(
         self,

@@ -29,6 +29,12 @@ export function ChatTabStrip() {
   } = useChat();
 
   const shouldReduceMotion = useReducedMotion();
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    isFirstRender.current = false;
+  }, []);
+
   const scrollContainerRef = useRef(null);
   const activeTabRef = useRef(null);
   const tabButtonRefs = useRef({});
@@ -185,7 +191,7 @@ export function ChatTabStrip() {
                   isDefault ? 'chat-tab-item--default' : ''
                 }`}
                 ref={isActive ? activeTabRef : null}
-                initial={shouldReduceMotion ? false : { opacity: 0, scale: 0.95 }}
+                initial={isFirstRender.current || shouldReduceMotion ? false : { opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={shouldReduceMotion ? false : { opacity: 0, scale: 0.9 }}
                 transition={{ duration: 0.15 }}
@@ -241,6 +247,7 @@ export function ChatTabStrip() {
                       className="chat-tab-item__rename-input"
                       value={editTitle}
                       onChange={(e) => setEditTitle(e.target.value)}
+                      onFocus={(e) => e.target.select()}
                       onKeyDown={(e) => {
                         e.stopPropagation();
                         if (e.key === 'Enter') commitRename(tab.id);
@@ -249,13 +256,13 @@ export function ChatTabStrip() {
                       onBlur={() => commitRename(tab.id)}
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
-                      maxLength={60}
+                      maxLength={100}
                       aria-label="Rename chat"
                     />
                   ) : (
-                    <Tooltip content={tab.title} placement="top">
-                      <span className="chat-tab-item__title">{tab.title}</span>
-                    </Tooltip>
+                    <span className="chat-tab-item__title" title={tab.title}>
+                      {tab.title}
+                    </span>
                   )}
 
                   {/* Close button (pinned inside tab padding at far right) or spacer for default tab */}

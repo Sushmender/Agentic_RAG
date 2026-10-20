@@ -55,6 +55,8 @@ class EmbeddingCost(BaseModel):
     provider: str = "openrouter"
     token_count: int = 0
     cost_usd: float = 0.0
+    embed_cache_hit: bool = False
+    embed_attempts: int = 1
 
 
 class LLMCost(BaseModel):
@@ -97,6 +99,14 @@ class TelemetryRecord(BaseModel):
     cache_hit: bool = Field(
         default=False,
         description="True if answer was served from Redis cache",
+    )
+    embed_cache_hit: bool = Field(
+        default=False,
+        description="True if query embedding was served from cache",
+    )
+    embed_attempts: int = Field(
+        default=1,
+        description="Number of provider attempts made for query embedding",
     )
 
     # Ingestion-specific (empty/None for query records)

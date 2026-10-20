@@ -327,6 +327,26 @@
   flex-direction: column;
 }
 
+@keyframes shellPageFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.shell__page--fade-in {
+  animation: shellPageFadeIn 150ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell__page--fade-in {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* ── Bottom status bar ────────────────────────────────────── */
 .statusbar {
   height: var(--statusbar-height);

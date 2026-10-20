@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     RETRY_WAIT_SECONDS: float = 1.0
     TIMEOUT_SECONDS: float = 30.0
 
+    # ── Query Embedding Resilience & Optimization ────────────────────────────
+    EMBED_QUERY_TIMEOUT_S: float = 6.0
+    EMBED_QUERY_MAX_ATTEMPTS: int = 3
+    EMBED_QUERY_BACKOFF_S: float = 0.5
+    EMBED_QUERY_HEDGE_AFTER_S: float = 2.5
+    EMBED_QUERY_HEDGE_ENABLED: bool = True
+
     # ── Allowed MIME types ───────────────────────────────────────────────────
     ALLOWED_MIME_TYPES: List[str] = [
         "application/pdf",

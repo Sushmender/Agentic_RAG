@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import time
 from typing import Any, Callable, Type, TypeVar
 
+import httpx
 from tenacity import (
     AsyncRetrying,
     RetryError,
@@ -43,6 +45,7 @@ def with_retry(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             attempt = 0
+            last_attempt_ms: float = 0.0
             try:
                 async for attempt_obj in AsyncRetrying(
                     stop=stop_after_attempt(max_attempts),
@@ -53,13 +56,36 @@ def with_retry(
                     with attempt_obj:
                         attempt += 1
                         if attempt > 1:
+                            exc = (
+                                attempt_obj.retry_state.outcome.exception()
+                                if attempt_obj.retry_state.outcome
+                                else None
+                            )
+                            exc_type = type(exc).__name__ if exc else "UnknownException"
+                            if isinstance(exc, httpx.HTTPStatusError):
+                                status_info = str(exc.response.status_code)
+                            elif isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+                                status_info = "timeout"
+                            elif exc and hasattr(exc, "status_code"):
+                                status_info = str(getattr(exc, "status_code"))
+                            else:
+                                status_info = "error" if exc else "unknown"
+
                             logger.warning(
                                 "Retrying provider call",
                                 provider=provider_name,
                                 function=func.__name__,
                                 attempt=attempt,
+                                exception_type=exc_type,
+                                http_status=status_info,
+                                elapsed_ms=last_attempt_ms,
                             )
-                        return await func(*args, **kwargs)
+                        t0 = time.monotonic()
+                        try:
+                            return await func(*args, **kwargs)
+                        except Exception:
+                            last_attempt_ms = round((time.monotonic() - t0) * 1000, 1)
+                            raise
             except RetryError as exc:
                 logger.error(
                     "All retry attempts exhausted",

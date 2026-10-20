@@ -113,6 +113,14 @@ class QueryResponse(BaseModel):
     )
     route_type: RouteType = Field(..., description="Query route: text | multimodal | hybrid")
     cache_hit: bool = Field(default=False, description="True if answer served from Redis cache")
+    embed_cache_hit: Optional[bool] = Field(
+        default=None,
+        description="True if query embedding was served from cache",
+    )
+    embed_attempts: Optional[int] = Field(
+        default=None,
+        description="Number of provider attempts made for query embedding",
+    )
     model_used: str = Field(default="", description="LLM model that generated the answer")
     provider_used: str = Field(default="", description="Inference provider: groq | openrouter")
     latency: LatencyBreakdown = Field(default_factory=LatencyBreakdown)
