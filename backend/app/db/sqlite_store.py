@@ -28,11 +28,18 @@ from app.core.logging import get_logger
 from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
 from app.schemas.job import Job, JobStatus
 
+import os
+
 logger = get_logger(__name__)
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 _DB_PATH = _BACKEND_DIR / "data" / "rag.db"
-_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def _get_db_path() -> Path:
+    env_path = os.getenv("SQLITE_DB_PATH")
+    p = Path(env_path) if env_path else _DB_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 # ── DDL ────────────────────────────────────────────────────────────────────────
 
@@ -95,8 +102,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 async def init_sqlite() -> None:
     """Create tables and indexes. Called once during app lifespan startup."""
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    async with aiosqlite.connect(_DB_PATH) as db:
+    _get_db_path().parent.mkdir(parents=True, exist_ok=True)
+    async with aiosqlite.connect(_get_db_path()) as db:
         await db.execute(_CREATE_DOCUMENTS)
         await db.execute(_CREATE_JOBS)
         await db.execute(_CREATE_JOB_DOC_INDEX)
@@ -112,7 +119,7 @@ async def init_sqlite() -> None:
             await db.execute("ALTER TABLE documents ADD COLUMN file_size_bytes INTEGER DEFAULT 0")
 
         await db.commit()
-    logger.info("SQLite store initialised", db_path=str(_DB_PATH))
+    logger.info("SQLite store initialised", db_path=str(_get_db_path()))
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -192,7 +199,7 @@ class DocumentSQLiteStore:
     async def save(self, doc: DocumentMetadata) -> None:
         """Insert or replace a document record (upsert by document_id)."""
         doc_type_val = doc.document_type.value if hasattr(doc.document_type, "value") else str(doc.document_type)
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             await db.execute(
                 """
                 INSERT INTO documents
@@ -229,7 +236,7 @@ class DocumentSQLiteStore:
 
     async def get(self, document_id: str, user_id: str | None = None) -> Optional[DocumentMetadata]:
         """Fetch a document by ID. If user_id provided, enforces ownership."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             if user_id:
                 cur = await db.execute(
@@ -246,7 +253,7 @@ class DocumentSQLiteStore:
 
     async def list_for_user(self, user_id: str) -> List[DocumentMetadata]:
         """Return all documents owned by user_id, most recent first."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT * FROM documents WHERE user_id=? ORDER BY created_at DESC",
@@ -268,7 +275,7 @@ class DocumentSQLiteStore:
     ) -> None:
         """Mutate status + optional fields on an existing document record."""
         now = _now_iso()
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             # Fetch existing to preserve unchanged fields
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
@@ -301,7 +308,7 @@ class DocumentSQLiteStore:
 
     async def get_by_filename(self, filename: str, user_id: str) -> List[DocumentMetadata]:
         """Fetch all documents with the given filename owned by user_id."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT * FROM documents WHERE filename=? AND user_id=? ORDER BY created_at DESC",
@@ -312,7 +319,7 @@ class DocumentSQLiteStore:
 
     async def delete(self, document_id: str, user_id: str | None = None) -> bool:
         """Delete a document record by document_id (and optionally user_id)."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             if user_id:
                 cur = await db.execute(
                     "DELETE FROM documents WHERE document_id=? AND user_id=?",
@@ -327,14 +334,14 @@ class DocumentSQLiteStore:
             return cur.rowcount > 0
 
     async def exists(self, document_id: str) -> bool:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             cur = await db.execute(
                 "SELECT 1 FROM documents WHERE document_id=?", (document_id,)
             )
             return await cur.fetchone() is not None
 
     async def count(self) -> int:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             cur = await db.execute("SELECT COUNT(*) FROM documents")
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -350,7 +357,7 @@ class JobSQLiteStore:
 
     async def save(self, job: Job) -> None:
         """Insert or replace a job record."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             await db.execute(
                 """
                 INSERT INTO jobs
@@ -381,14 +388,14 @@ class JobSQLiteStore:
             await db.commit()
 
     async def get(self, job_id: str) -> Optional[Job]:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
             row = await cur.fetchone()
         return _job_from_row(row) if row else None
 
     async def get_by_document(self, document_id: str) -> Optional[Job]:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT * FROM jobs WHERE document_id=? ORDER BY created_at DESC LIMIT 1",
@@ -409,7 +416,7 @@ class JobSQLiteStore:
     ) -> None:
         """Mutate status and timestamps on an existing job record."""
         now = _now_iso()
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,))
             row = await cur.fetchone()
@@ -448,18 +455,18 @@ class JobSQLiteStore:
             await db.commit()
 
     async def exists(self, job_id: str) -> bool:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             cur = await db.execute("SELECT 1 FROM jobs WHERE job_id=?", (job_id,))
             return await cur.fetchone() is not None
 
     async def delete_by_document(self, document_id: str) -> None:
         """Delete all jobs associated with a document_id."""
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             await db.execute("DELETE FROM jobs WHERE document_id=?", (document_id,))
             await db.commit()
 
     async def count(self) -> int:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             cur = await db.execute("SELECT COUNT(*) FROM jobs")
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -469,7 +476,7 @@ class UserSQLiteStore:
     """SQLite-backed store for User records."""
 
     async def save(self, user: dict) -> None:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             await db.execute(
                 """
                 INSERT INTO users (user_id, username, email, hashed_password, is_active, created_at)
@@ -492,7 +499,7 @@ class UserSQLiteStore:
             await db.commit()
 
     async def get_by_username(self, username: str) -> Optional[dict]:
-        async with aiosqlite.connect(_DB_PATH) as db:
+        async with aiosqlite.connect(_get_db_path()) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute("SELECT * FROM users WHERE username = ?", (username,))
             row = await cur.fetchone()

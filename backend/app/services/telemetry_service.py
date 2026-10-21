@@ -31,11 +31,14 @@ from app.schemas.telemetry import (
 logger = get_logger(__name__)
 settings = get_settings()
 
+import os
+
 # ── Telemetry file path ────────────────────────────────────────────────────────
 
 def _telemetry_path() -> Path:
     """Return path to data/telemetry.jsonl, creating parent dirs as needed."""
-    path = Path("./data/telemetry.jsonl")
+    env_path = os.getenv("TELEMETRY_PATH")
+    path = Path(env_path) if env_path else Path("./data/telemetry.jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
