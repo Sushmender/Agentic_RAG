@@ -11,9 +11,11 @@ import os
 import sys
 import json
 import argparse
+import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
 import requests
 from dotenv import load_dotenv
 
@@ -23,7 +25,7 @@ API_KEY = os.getenv("LANDINGAI_API_KEY")
 # GA endpoint per current docs. Do NOT use the old /v1/tools/document-analysis path.
 API_URL = os.getenv("LANDINGAI_API_URL", "https://api.va.landing.ai/v1/ade/parse")
 DEFAULT_MODEL = os.getenv("LANDINGAI_MODEL", "dpt-2-latest")
-OUTPUT_DIR = Path("data/ade_outputs")
+OUTPUT_DIR = Path(tempfile.gettempdir()) / "ade_test_outputs"
 
 
 def banner(title: str):
@@ -36,6 +38,7 @@ def banner(title: str):
 # 1. Auth / connectivity check — 0 credits (no document sent, so no page is
 #    parsed; ADE bills per page processed, not per request).
 # ---------------------------------------------------------------------------
+@pytest.mark.live
 def test_connection() -> bool:
     banner("Step 1: Auth + Connectivity (0 credits)")
     # ...
@@ -90,6 +93,7 @@ test_connection.__test__ = False
 #    Use a single sample page that mixes text + a table + a figure/image so
 #    one call exercises every chunk_type you care about.
 # ---------------------------------------------------------------------------
+@pytest.mark.live
 def test_parse_sample(file_path: str, model: str = DEFAULT_MODEL) -> dict | None:
     banner("Step 2: Real Parse Call (spends credits — runs once)")
 

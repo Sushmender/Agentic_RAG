@@ -1,8 +1,9 @@
 import os
+from pathlib import Path
+
+import pytest
 import requests
 from dotenv import load_dotenv
-
-from pathlib import Path
 
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
@@ -21,7 +22,7 @@ GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_MODEL = os.getenv("PRIMARY_LLM_MODEL", "qwen/qwen3.8-27b")
 
 
-
+@pytest.mark.live
 def test_openrouter():
     print(f"\n--- Testing OpenRouter ({OPENROUTER_MODEL}) ---")
     if not OPENROUTER_API_KEY:
@@ -55,6 +56,7 @@ def test_openrouter():
             print(f"Response text: {response.text}")
 
 
+@pytest.mark.live
 def test_groq():
     print(f"\n--- Testing Groq ({GROQ_MODEL}) ---")
     if not GROQ_API_KEY:
@@ -86,6 +88,7 @@ def test_groq():
             print(f"Response text: {response.text}")
 
 
+@pytest.mark.live
 def test_openrouter_embedding():
     print(f"\n--- Testing OpenRouter Embedding ({EMBEDDING_MODEL}) ---")
     if not OPENROUTER_API_KEY:
@@ -112,6 +115,8 @@ def test_openrouter_embedding():
         if 'response' in locals() and hasattr(response, 'text'):
             print(f"Response text: {response.text}")
 
+
+@pytest.mark.live
 def test_openrouter_reranker():
     print(f"\n--- Testing OpenRouter Reranker ({RERANKER_MODEL}) ---")
     if not OPENROUTER_API_KEY:

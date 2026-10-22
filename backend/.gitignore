@@ -48,3 +48,7 @@ htmlcov/
 # Linting and Typing
 .mypy_cache/
 .ruff_cache/
+
+data/
+*.bak
+*.backup

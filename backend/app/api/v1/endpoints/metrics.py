@@ -12,9 +12,10 @@ Returns MetricsResponse covering all 5 Day-7 benchmark categories:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.core.logging import get_logger
+from app.core.security import get_current_user_id
 from app.schemas.telemetry import MetricsResponse
 from app.services import telemetry_service
 
@@ -28,22 +29,25 @@ router = APIRouter(prefix="/metrics", tags=["Metrics"])
     summary="Aggregated observability metrics",
     description=(
         "Returns aggregated pipeline metrics computed from data/telemetry.jsonl. "
-        "Covers all 5 Day-7 benchmark categories: latency (avg + p95 per stage), "
+        "Covers all 5 benchmark categories: latency (avg + p95 per stage), "
         "token usage, ADE credits, embedding cost, and LLM cost. "
-        "No authentication required."
+        "Scoped to the authenticated user."
     ),
 )
-async def get_metrics() -> MetricsResponse:
+async def get_metrics(
+    user_id: str = Depends(get_current_user_id),
+) -> MetricsResponse:
     """
-    Aggregate and return all pipeline telemetry metrics.
+    Aggregate and return pipeline telemetry metrics for the authenticated user.
 
     Reads from data/telemetry.jsonl (last 5000 records).
     Returns instantly if no telemetry has been recorded yet.
     """
-    logger.info("Metrics requested")
-    metrics = await telemetry_service.compute_metrics(limit=5000)
+    logger.info("Metrics requested", user_id=user_id)
+    metrics = await telemetry_service.compute_metrics(limit=5000, user_id=user_id)
     logger.info(
         "Metrics computed",
+        user_id=user_id,
         query_count=metrics.query_count,
         ingestion_count=metrics.ingestion_count,
         records_analyzed=metrics.records_analyzed,

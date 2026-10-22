@@ -156,6 +156,30 @@ def make_all_patches(
     return patchers
 
 
+@pytest.fixture(autouse=True)
+def seed_test_user_document():
+    """Ensure test_user_001 owns doc_abc123 so full pipeline tests proceed past caller doc checks."""
+    import asyncio
+    from datetime import datetime, timezone
+    from app.db.sqlite_store import document_store
+    from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
+
+    now = datetime.now(timezone.utc)
+    doc = DocumentMetadata(
+        document_id="doc_abc123",
+        user_id="test_user_001",
+        filename="test.pdf",
+        document_type=DocumentType.PDF,
+        mime_type="application/pdf",
+        file_size_bytes=1024,
+        status=DocumentStatus.COMPLETED,
+        created_at=now,
+        updated_at=now,
+    )
+    asyncio.run(document_store.save(doc))
+    yield
+
+
 @pytest.fixture()
 def auth_headers():
     return get_auth_headers()

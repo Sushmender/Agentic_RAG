@@ -1318,3 +1318,54 @@ mark.source-highlight,
   box-sizing: border-box;
 }
 
+/* ── Low-Relevance Collapsible Sources Row ────────────────── */
+.low-relevance-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.low-relevance-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.low-relevance-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+  background: var(--bg-elevated);
+}
+
+.low-relevance-toggle--expanded {
+  border-style: solid;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+}
+
+.low-relevance-chevron {
+  transition: transform var(--transition-fast);
+}
+
+.low-relevance-chevron--open {
+  transform: rotate(180deg);
+}
+
+.low-relevance-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+

@@ -281,13 +281,17 @@ class TestComputeMetrics:
 
 class TestMetricsEndpoint:
     @pytest.mark.asyncio
-    async def test_get_metrics_returns_200(self, isolated_telemetry_file):
-        """GET /metrics must return 200 with a MetricsResponse-shaped body."""
+    async def test_get_metrics_returns_200_with_auth(self, isolated_telemetry_file):
+        """GET /metrics must return 200 with a MetricsResponse-shaped body when authenticated."""
         from httpx import AsyncClient, ASGITransport
         from app.main import app
+        from app.core.security import create_access_token
+
+        token = create_access_token("user-test")
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/api/v1/metrics")
+            resp = await client.get("/api/v1/metrics", headers=headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -302,8 +306,8 @@ class TestMetricsEndpoint:
             assert key in data, f"Missing key: {key}"
 
     @pytest.mark.asyncio
-    async def test_get_metrics_no_auth_required(self, isolated_telemetry_file):
-        """GET /metrics must be accessible without a JWT token."""
+    async def test_get_metrics_unauthenticated_returns_401(self, isolated_telemetry_file):
+        """GET /metrics without a JWT token must return 401."""
         from httpx import AsyncClient, ASGITransport
         from app.main import app
 
@@ -311,20 +315,24 @@ class TestMetricsEndpoint:
             # No Authorization header
             resp = await client.get("/api/v1/metrics")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_get_metrics_with_real_data(self, isolated_telemetry_file):
-        """GET /metrics returns non-zero counts after telemetry records are appended."""
-        # Pre-populate telemetry
-        await telemetry_service.append_record(_make_query_record())
-        await telemetry_service.append_record(_make_ingestion_record())
+        """GET /metrics returns non-zero counts after telemetry records are appended for user."""
+        # Pre-populate telemetry for user-test
+        await telemetry_service.append_record(_make_query_record(user_id="user-test"))
+        await telemetry_service.append_record(_make_ingestion_record(user_id="user-test"))
 
         from httpx import AsyncClient, ASGITransport
         from app.main import app
+        from app.core.security import create_access_token
+
+        token = create_access_token("user-test")
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/api/v1/metrics")
+            resp = await client.get("/api/v1/metrics", headers=headers)
 
         data = resp.json()
         assert data["query_count"] == 1

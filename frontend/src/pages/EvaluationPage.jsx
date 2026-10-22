@@ -336,7 +336,25 @@ export default function EvaluationPage() {
         {loading && <RunningPanel elapsed={elapsed} />}
       </AnimatePresence>
 
-      {/* ── Empty state ────────────────────────────────────────── */}
+      {/* ── No matching gold data state ────────────────────────── */}
+      {!loading && report?.status === 'no_gold_data' && !error && (
+        <motion.div
+          className="eval-empty"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <div className="eval-empty-icon">
+            <Target size={48} opacity={0.3} />
+          </div>
+          <h3>No evaluation questions match your documents yet</h3>
+          <p>
+            The gold dataset contains benchmark questions for specific documents.
+            Upload documents corresponding to the evaluation benchmark to view Recall@K and Precision@K scores.
+          </p>
+        </motion.div>
+      )}
+
+      {/* ── Initial empty state ─────────────────────────────────── */}
       {!loading && !report && !error && (
         <motion.div
           className="eval-empty"
@@ -356,7 +374,7 @@ export default function EvaluationPage() {
 
       {/* ── Results ───────────────────────────────────────────── */}
       <AnimatePresence>
-        {!loading && report && (
+        {!loading && report && report.status !== 'no_gold_data' && (
           <motion.div
             className="eval-results"
             initial={{ opacity: 0 }}

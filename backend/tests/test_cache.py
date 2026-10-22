@@ -1,4 +1,4 @@
-﻿"""
+"""
 backend/tests/test_cache.py
 Day 6: Tests for cache_service.py
 
@@ -54,10 +54,12 @@ def test_cache_key_format():
 
 
 def test_cache_key_all_docs():
-    """When no document filter, key uses __all__ sentinel."""
-    from app.services.cache_service import _cache_key, _doc_key
-    key = _cache_key("user-1", _doc_key(None))
-    assert key == "user:user-1:qa:__all__"
+    """When no document filter, key uses __all__:{hash} scoped by sorted document IDs."""
+    from app.services.cache_service import _cache_key, _doc_key, compute_all_docs_hash
+    docs = ["doc-1", "doc-2"]
+    expected_hash = compute_all_docs_hash(docs)
+    key = _cache_key("user-1", _doc_key(None, all_document_ids=docs))
+    assert key == f"user:user-1:qa:__all__:{expected_hash}"
 
 
 def test_field_key_normalisation():
@@ -67,10 +69,11 @@ def test_field_key_normalisation():
     assert _field_key("  What is revenue?  ") == _field_key("what is revenue?")
 
 
-def test_doc_key_none_returns_all():
-    from app.services.cache_service import _doc_key
-    assert _doc_key(None) == "__all__"
-    assert _doc_key([]) == "__all__"
+def test_doc_key_none_returns_all_with_hash():
+    from app.services.cache_service import _doc_key, compute_all_docs_hash
+    empty_hash = compute_all_docs_hash([])
+    assert _doc_key(None) == f"__all__:{empty_hash}"
+    assert _doc_key([]) == f"__all__:{empty_hash}"
 
 
 def test_doc_key_single_doc():
@@ -78,10 +81,11 @@ def test_doc_key_single_doc():
     assert _doc_key(["doc-123"]) == "doc-123"
 
 
-def test_doc_key_multi_docs_returns_all():
-    from app.services.cache_service import _doc_key
-    # Multiple docs -> __all__ sentinel
-    assert _doc_key(["doc-1", "doc-2"]) == "__all__"
+def test_doc_key_multi_docs_returns_all_with_hash():
+    from app.services.cache_service import _doc_key, compute_all_docs_hash
+    docs = ["doc-1", "doc-2"]
+    expected_hash = compute_all_docs_hash(docs)
+    assert _doc_key(None, all_document_ids=docs) == f"__all__:{expected_hash}"
 
 
 # ── Cache miss ----------------------------------------------------------------

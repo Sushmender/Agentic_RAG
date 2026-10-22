@@ -8,6 +8,7 @@ Uses SCAN (never KEYS) for cache invalidation patterns.
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlparse
 
 import redis.asyncio as aioredis
 
@@ -37,7 +38,12 @@ async def init_redis() -> None:
     """
     global _redis_client
 
-    logger.info("Initializing Redis client", url_prefix=settings.REDIS_URL[:20] + "...")
+    parsed = urlparse(settings.REDIS_URL)
+    scheme = parsed.scheme or "redis"
+    host = parsed.hostname or "localhost"
+    port = f":{parsed.port}" if parsed.port else ""
+    safe_endpoint = f"{scheme}://{host}{port}"
+    logger.info("Initializing Redis client", endpoint=safe_endpoint)
 
     _redis_client = aioredis.Redis.from_url(
         settings.REDIS_URL,

@@ -1,4 +1,4 @@
-﻿"""
+"""
 backend/app/services/cache_service.py
 Day 6: Redis Query-Answer Cache.
 
@@ -50,19 +50,32 @@ def _field_key(query: str) -> str:
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
 
-def _doc_key(document_ids: list[str] | None) -> str:
+def compute_all_docs_hash(document_ids: list[str] | None) -> str:
+    """
+    Compute a short 12-char SHA-1 hash from sorted document IDs.
+    Example: sha1(",".join(sorted(ids)))[:12]
+    """
+    sorted_ids = sorted(document_ids or [])
+    raw = ",".join(sorted_ids).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
+def _doc_key(
+    document_ids: list[str] | None,
+    all_document_ids: list[str] | None = None,
+) -> str:
     """
     Map the (possibly absent) document_ids filter to a single cache dimension.
 
-    - None / empty list  -> __all__  (query searched all docs)
+    - None / empty list  -> __all__:{sha1(sorted ids)[:12]}
     - Single doc         -> doc_id
-    - Multiple docs      -> __all__  (treat as global query)
+    - Multiple docs      -> __all__:{sha1(sorted ids)[:12]}
     """
     if not document_ids:
-        return _ALL_DOCS_SENTINEL
+        return f"__all__:{compute_all_docs_hash(all_document_ids)}"
     if len(document_ids) == 1:
         return document_ids[0]
-    return _ALL_DOCS_SENTINEL
+    return f"__all__:{compute_all_docs_hash(all_document_ids or document_ids)}"
 
 
 # -- Public API ----------------------------------------------------------------
@@ -71,6 +84,7 @@ async def get_cached_response(
     user_id: str,
     document_ids: "list[str] | None",
     query: str,
+    all_document_ids: "list[str] | None" = None,
 ) -> "Optional[object]":
     """
     Look up a cached QueryResponse.
@@ -82,7 +96,16 @@ async def get_cached_response(
     from app.schemas.query import QueryResponse
 
     try:
-        key = _cache_key(user_id, _doc_key(document_ids))
+        if not document_ids and all_document_ids is None:
+            try:
+                from app.db.sqlite_store import document_store
+                docs = await document_store.list_for_user(user_id)
+                all_document_ids = [d.document_id for d in docs]
+            except Exception:
+                all_document_ids = []
+
+        doc_k = _doc_key(document_ids, all_document_ids=all_document_ids)
+        key = _cache_key(user_id, doc_k)
         field = _field_key(query)
         raw = await redis_client.hget(key, field)
 
@@ -90,7 +113,7 @@ async def get_cached_response(
             logger.info(
                 "Cache MISS",
                 user_id=user_id,
-                doc_key=_doc_key(document_ids),
+                doc_key=doc_k,
             )
             return None
 
@@ -99,7 +122,7 @@ async def get_cached_response(
         logger.info(
             "Cache HIT",
             user_id=user_id,
-            doc_key=_doc_key(document_ids),
+            doc_key=doc_k,
         )
         return response
 
@@ -117,6 +140,7 @@ async def set_cached_response(
     document_ids: "list[str] | None",
     query: str,
     response: "object",
+    all_document_ids: "list[str] | None" = None,
 ) -> None:
     """
     Store a QueryResponse in the cache.
@@ -128,7 +152,15 @@ async def set_cached_response(
     Degrades gracefully if Redis is unavailable.
     """
     try:
-        doc_key = _doc_key(document_ids)
+        if not document_ids and all_document_ids is None:
+            try:
+                from app.db.sqlite_store import document_store
+                docs = await document_store.list_for_user(user_id)
+                all_document_ids = [d.document_id for d in docs]
+            except Exception:
+                all_document_ids = []
+
+        doc_key = _doc_key(document_ids, all_document_ids=all_document_ids)
         key = _cache_key(user_id, doc_key)
         field = _field_key(query)
 
@@ -188,6 +220,7 @@ async def invalidate_document_cache(document_id: str) -> int:
 async def list_user_qa_pairs(
     user_id: str,
     document_ids: "list[str] | None",
+    all_document_ids: "list[str] | None" = None,
 ) -> "list[dict]":
     """
     Return all cached Q&A field->value pairs for a user+document combination.
@@ -200,7 +233,15 @@ async def list_user_qa_pairs(
     from app.schemas.query import QueryResponse
 
     try:
-        doc_key = _doc_key(document_ids)
+        if not document_ids and all_document_ids is None:
+            try:
+                from app.db.sqlite_store import document_store
+                docs = await document_store.list_for_user(user_id)
+                all_document_ids = [d.document_id for d in docs]
+            except Exception:
+                all_document_ids = []
+
+        doc_key = _doc_key(document_ids, all_document_ids=all_document_ids)
         key = _cache_key(user_id, doc_key)
         raw_pairs = await redis_client.hgetall(key)
 

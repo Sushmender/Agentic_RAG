@@ -84,24 +84,65 @@ async def query(
     top_k = request.top_k or cfg.RERANK_TOP_K
     preferred_provider = (request.llm_provider or "groq").lower()
 
+    # ── Step 0a: Resolve caller documents and enforce ownership ───────────────
+    user_docs = await document_store.list_for_user(user_id)
+    caller_doc_ids = [d.document_id for d in user_docs]
+    caller_doc_ids_set = set(caller_doc_ids)
+
+    if not request.document_ids:
+        if not caller_doc_ids:
+            # Caller has no documents — return friendly answer without calling any provider
+            total_ms = round((time.monotonic() - pipeline_start) * 1000, 1)
+            return QueryResponse(
+                answer="Upload a document to get started",
+                sources=[],
+                route_type=route_query(request.query),
+                cache_hit=False,
+                embed_cache_hit=False,
+                embed_attempts=0,
+                model_used="",
+                provider_used="",
+                latency=LatencyBreakdown(
+                    total_ms=total_ms,
+                    cache_check_ms=0.0,
+                    query_embed_ms=0.0,
+                    retrieval_ms=0.0,
+                    reranking_ms=0.0,
+                    llm_ms=0.0,
+                ),
+                token_usage={},
+                cost_usd=0.0,
+            )
+        retrieval_doc_ids = caller_doc_ids
+    else:
+        for doc_id in request.document_ids:
+            if doc_id not in caller_doc_ids_set:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document not found",
+                )
+        retrieval_doc_ids = request.document_ids
+
     log = logger.bind(
         user_id=user_id,
         query_preview=request.query[:80],
         preferred_provider=preferred_provider,
         top_n=top_n,
         top_k=top_k,
+        retrieval_doc_ids=retrieval_doc_ids,
     )
     if request.document_ids:
         log = log.bind(document_ids=request.document_ids)
 
     log.info("Query pipeline started")
 
-    # ── Step 0: Cache check (Day 6) ───────────────────────────────────────────
+    # ── Step 0b: Cache check (Day 6) ──────────────────────────────────────────
     cache_check_start = time.monotonic()
     cached = await cache_service.get_cached_response(
         user_id=user_id,
         document_ids=request.document_ids,
         query=request.query,
+        all_document_ids=caller_doc_ids,
     )
     cache_check_ms = round((time.monotonic() - cache_check_start) * 1000, 1)
 
@@ -185,7 +226,7 @@ async def query(
         candidates: List[RetrievalResult] = _run_retrieval(
             route=route,
             query_embedding=query_embedding,
-            document_ids=request.document_ids,
+            document_ids=retrieval_doc_ids,
             top_n=top_n,
         )
     except Exception as exc:
@@ -368,6 +409,7 @@ async def query(
         document_ids=request.document_ids,
         query=request.query,
         response=response,
+        all_document_ids=caller_doc_ids,
     )
 
     # ── Step 8: Append telemetry (Day 7) ────────────────────────────────

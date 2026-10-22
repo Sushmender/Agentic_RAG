@@ -315,3 +315,12 @@ def patch_and_reset_stores(set_test_env, monkeypatch):
     job_store._doc_index.clear()
     embedding_cache.in_memory_lru.clear()
     set_test_env["fake_redis"].clear()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: List[pytest.Item]) -> None:
+    """Skip tests marked with 'live' unless RUN_LIVE_TESTS=1 is set."""
+    if os.getenv("RUN_LIVE_TESTS") != "1":
+        skip_live = pytest.mark.skip(reason="Live test skipped; set RUN_LIVE_TESTS=1 to run")
+        for item in items:
+            if "live" in item.keywords:
+                item.add_marker(skip_live)

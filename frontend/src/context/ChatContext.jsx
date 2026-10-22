@@ -641,7 +641,25 @@ export function ChatProvider({ children }) {
           err.response?.data?.detail || err.message || 'Query failed.';
         let msg = detail;
 
-        if (isTimeout) {
+        const isDocNotFound =
+          status === 404 &&
+          (detail === 'Document not found' ||
+           detail?.toLowerCase().includes('document not found'));
+
+        if (isDocNotFound) {
+          msg = 'That document is no longer available';
+          // Remove stale document(s) from that tab's filter chips
+          const currentTabState = stateRef.current.tabs.find((t) => t.id === tabId);
+          const currentDocIds = currentTabState?.docIds || [];
+          const updatedDocIds = currentDocIds.filter((id) => !docIds.includes(id));
+          dispatch({
+            type: 'UPDATE_TAB',
+            payload: {
+              tabId,
+              updates: { docIds: updatedDocIds },
+            },
+          });
+        } else if (isTimeout) {
           msg = 'The model took too long to respond. Try again or switch model.';
         } else if (status === 429) {
           msg = 'Rate limit reached — wait a moment and try again.';
@@ -662,8 +680,8 @@ export function ChatProvider({ children }) {
           },
         });
 
-        // Show toast for non-timeout errors; timeouts are shown once inline
-        if (!isTimeout) {
+        // Show toast for unexpected errors; timeouts and missing docs are shown inline
+        if (!isTimeout && !isDocNotFound) {
           toast.error(msg);
         }
       } finally {

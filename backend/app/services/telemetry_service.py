@@ -116,13 +116,24 @@ def _percentile(values: List[float], pct: float) -> float:
     return round(sorted_vals[idx], 2)
 
 
-async def compute_metrics(limit: int = 5000) -> MetricsResponse:
+async def compute_metrics(
+    limit: int = 5000,
+    user_id: Optional[str] = None,
+) -> MetricsResponse:
     """
     Aggregate data/telemetry.jsonl into a MetricsResponse.
 
-    Reads at most `limit` records (most recent).  All monetary values in USD.
+    Reads at most `limit` records (most recent). All monetary values in USD.
+    If `user_id` is specified, filters strictly to records owned by that user.
+    Records without a user_id are never visible to any user.
     """
     records = await load_records(limit=limit)
+
+    if user_id is not None:
+        records = [r for r in records if r.user_id and r.user_id == user_id]
+    else:
+        # Records without a user_id are never visible to any user
+        records = [r for r in records if r.user_id]
 
     if not records:
         return MetricsResponse()

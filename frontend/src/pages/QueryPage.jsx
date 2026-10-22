@@ -1054,9 +1054,31 @@ function QueryPageInner() {
   }, [activeTab.messages, activeTab.activeMessageId]);
 
   const lastResult = activeResultMsg?.result || null;
-  const sourcesForCurrentResult = lastResult?.sources || [];
-  const tablesInSources = sourcesForCurrentResult.filter((s) => s.chunk_type === 'table');
-  const imagesInSources = sourcesForCurrentResult.filter((s) => s.chunk_type === 'figure');
+  const sourcesForCurrentResult = useMemo(() => lastResult?.sources || [], [lastResult?.sources]);
+  const tablesInSources = useMemo(() => sourcesForCurrentResult.filter((s) => s.chunk_type === 'table'), [sourcesForCurrentResult]);
+  const imagesInSources = useMemo(() => sourcesForCurrentResult.filter((s) => s.chunk_type === 'figure'), [sourcesForCurrentResult]);
+
+  const [showLowRelevance, setShowLowRelevance] = useState(false);
+
+  useEffect(() => {
+    setShowLowRelevance(false);
+  }, [activeResultMsg?.id]);
+
+  const { visibleSources, lowRelevanceSources } = useMemo(() => {
+    const visible = [];
+    const low = [];
+    sourcesForCurrentResult.forEach((src, idx) => {
+      const rel = formatRelevance(src.relevance_score);
+      // Always show at least the top 2 sources (idx < 2)
+      // Sources with relevance under 5% (0.05) are collapsed
+      if (idx < 2 || rel.val >= 0.05) {
+        visible.push({ source: src, rank: idx + 1 });
+      } else {
+        low.push({ source: src, rank: idx + 1 });
+      }
+    });
+    return { visibleSources: visible, lowRelevanceSources: low };
+  }, [sourcesForCurrentResult]);
 
   /* Submit */
   const handleSubmit = (e) => {
@@ -1072,6 +1094,10 @@ function QueryPageInner() {
 
   const handleCitationClick = (num) => {
     updateTab(activeTab.id, { evidenceTab: 'sources' });
+    const targetRank = parseInt(num, 10);
+    if (lowRelevanceSources.some((item) => item.rank === targetRank)) {
+      setShowLowRelevance(true);
+    }
     setHighlighted(num);
     setTimeout(() => {
       const el = document.getElementById(`source-${num}`);
@@ -1083,7 +1109,7 @@ function QueryPageInner() {
           setHighlighted(null);
         }, 1600);
       }
-    }, 100);
+    }, 120);
   };
 
   const handleRegenerate = (assistantMsgId) => {
@@ -1389,17 +1415,57 @@ function QueryPageInner() {
                       description="No matching chunks were found for this query."
                     />
                   ) : (
-                    sourcesForCurrentResult.map((src, i) => (
-                      <SourceCard
-                        key={src.chunk_id}
-                        source={src}
-                        rank={i + 1}
-                        isHighlighted={highlighted === String(i + 1)}
-                        allSources={sourcesForCurrentResult}
-                        answer={lastResult?.answer}
-                        query={lastResult?.query}
-                      />
-                    ))
+                    <>
+                      {visibleSources.map(({ source, rank }) => (
+                        <SourceCard
+                          key={source.chunk_id}
+                          source={source}
+                          rank={rank}
+                          isHighlighted={highlighted === String(rank)}
+                          allSources={sourcesForCurrentResult}
+                          answer={lastResult?.answer}
+                          query={lastResult?.query}
+                        />
+                      ))}
+
+                      {lowRelevanceSources.length > 0 && (
+                        <div className="low-relevance-section">
+                          <button
+                            type="button"
+                            className={`low-relevance-toggle ${showLowRelevance ? 'low-relevance-toggle--expanded' : ''}`}
+                            onClick={() => setShowLowRelevance((prev) => !prev)}
+                            aria-expanded={showLowRelevance}
+                            id="toggle-low-relevance-btn"
+                          >
+                            <ChevronDown
+                              size={14}
+                              className={`low-relevance-chevron ${showLowRelevance ? 'low-relevance-chevron--open' : ''}`}
+                            />
+                            <span>
+                              {showLowRelevance
+                                ? `Hide ${lowRelevanceSources.length} low-relevance sources`
+                                : `Show ${lowRelevanceSources.length} low-relevance sources`}
+                            </span>
+                          </button>
+
+                          {showLowRelevance && (
+                            <div className="low-relevance-sources animate-fade-in">
+                              {lowRelevanceSources.map(({ source, rank }) => (
+                                <SourceCard
+                                  key={source.chunk_id}
+                                  source={source}
+                                  rank={rank}
+                                  isHighlighted={highlighted === String(rank)}
+                                  allSources={sourcesForCurrentResult}
+                                  answer={lastResult?.answer}
+                                  query={lastResult?.query}
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
