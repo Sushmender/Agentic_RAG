@@ -21,6 +21,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.schemas.telemetry import (
     EmbeddingCost,
+    IngestionStats,
     LLMCost,
     MetricsResponse,
     RecentQueryItem,
@@ -142,20 +143,33 @@ async def compute_metrics(
     ingestion_records = [r for r in records if r.record_type == "ingestion"]
 
     # ── Latency ───────────────────────────────────────────────────────────────
-    all_total_ms = [r.latency.total_ms for r in records if r.latency.total_ms > 0]
     query_total_ms = [r.latency.total_ms for r in query_records if r.latency.total_ms > 0]
     avg_lat = round(sum(query_total_ms) / len(query_total_ms), 2) if query_total_ms else 0.0
+    p50_lat = _percentile(query_total_ms, 50)
     p95_lat = _percentile(query_total_ms, 95)
 
     def _avg(vals: List[float]) -> float:
         return round(sum(vals) / len(vals), 2) if vals else 0.0
 
+    def _med(vals: List[float]) -> float:
+        return _percentile(vals, 50)
+
+    # Average latency by stage (query stages + legacy ade_ms)
     stage = StageLatency(
         embedding_ms=_avg([r.latency.embedding_ms for r in query_records if r.latency.embedding_ms > 0]),
         retrieval_ms=_avg([r.latency.retrieval_ms for r in query_records if r.latency.retrieval_ms > 0]),
         reranking_ms=_avg([r.latency.reranking_ms for r in query_records if r.latency.reranking_ms > 0]),
         llm_ms=_avg([r.latency.llm_ms for r in query_records if r.latency.llm_ms > 0]),
         ade_ms=_avg([r.latency.ade_ms for r in ingestion_records if r.latency.ade_ms > 0]),
+    )
+
+    # Median latency by stage (query stages + legacy ade_ms)
+    median_stage = StageLatency(
+        embedding_ms=_med([r.latency.embedding_ms for r in query_records if r.latency.embedding_ms > 0]),
+        retrieval_ms=_med([r.latency.retrieval_ms for r in query_records if r.latency.retrieval_ms > 0]),
+        reranking_ms=_med([r.latency.reranking_ms for r in query_records if r.latency.reranking_ms > 0]),
+        llm_ms=_med([r.latency.llm_ms for r in query_records if r.latency.llm_ms > 0]),
+        ade_ms=_med([r.latency.ade_ms for r in ingestion_records if r.latency.ade_ms > 0]),
     )
 
     # ── Cache ─────────────────────────────────────────────────────────────────
@@ -168,8 +182,18 @@ async def compute_metrics(
     total_llm_cost = round(sum(r.llm_cost.cost_usd for r in records), 6)
     total_cost = round(total_embed_cost + total_llm_cost, 6)
 
-    # ── ADE credits ───────────────────────────────────────────────────────────
+    # ── Ingestion & ADE stats ─────────────────────────────────────────────────
     total_ade = round(sum(r.ade_credits.per_ingestion for r in ingestion_records), 4)
+    ade_durations = [r.latency.ade_ms for r in ingestion_records if r.latency.ade_ms > 0]
+    avg_ade = _avg(ade_durations)
+    med_ade = _med(ade_durations)
+
+    ingestion_stats = IngestionStats(
+        documents_ingested=len(ingestion_records),
+        avg_ade_ms=avg_ade,
+        median_ade_ms=med_ade,
+        total_ade_credits=total_ade,
+    )
 
     # ── Timestamps & Recent Queries (P-4) ─────────────────────────────────────
     timestamps = [r.timestamp.isoformat() for r in records]
@@ -200,13 +224,20 @@ async def compute_metrics(
         cache_hit_count=cache_hits,
         cache_hit_rate=cache_rate,
         avg_latency_ms=avg_lat,
+        p50_latency_ms=p50_lat,
+        median_latency_ms=p50_lat,
         p95_latency_ms=p95_lat,
         latency_by_stage=stage,
+        median_latency_by_stage=median_stage,
+        p50_latency_by_stage=median_stage,
         total_tokens=total_tokens,
         total_cost_usd=total_cost,
         total_embedding_cost_usd=total_embed_cost,
         total_llm_cost_usd=total_llm_cost,
         total_ade_credits=total_ade,
+        ingestion_stats=ingestion_stats,
+        avg_ade_latency_ms=avg_ade,
+        median_ade_latency_ms=med_ade,
         records_analyzed=len(records),
         oldest_record_ts=oldest,
         newest_record_ts=newest,

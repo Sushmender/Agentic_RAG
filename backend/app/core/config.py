@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     RETRY_WAIT_SECONDS: float = 1.0
     TIMEOUT_SECONDS: float = 30.0
 
+    # ── Follow-up Query Rewriting ─────────────────────────────────────────────
+    REWRITE_ENABLED: bool = True
+    REWRITE_TIMEOUT_S: float = 4.0
+
     # ── Query Embedding Resilience & Optimization ────────────────────────────
     EMBED_QUERY_TIMEOUT_S: float = 6.0
     EMBED_QUERY_MAX_ATTEMPTS: int = 3

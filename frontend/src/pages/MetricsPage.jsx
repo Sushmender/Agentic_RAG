@@ -49,6 +49,25 @@ const fmtCost = (usd) => {
 };
 const fmtUsd = (usd) => fmtCost(usd).display;
 
+function formatQueryTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '—';
+
+  const now = new Date();
+  const isToday =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+
+  const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (isToday) {
+    return `Today, ${timeStr}`;
+  }
+  const monthStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return `${monthStr}, ${timeStr}`;
+}
+
 /* ── Skeleton grid ──────────────────────────────────────────────────────── */
 function SkeletonGrid({ count = 4 }) {
   return (
@@ -181,6 +200,11 @@ function QueriesTable({ records, navigate }) {
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
       let av = a[sortKey], bv = b[sortKey];
+      if (sortKey === 'timestamp') {
+        const at = av ? new Date(av).getTime() : (sortDir === 'asc' ? Infinity : -Infinity);
+        const bt = bv ? new Date(bv).getTime() : (sortDir === 'asc' ? Infinity : -Infinity);
+        return sortDir === 'asc' ? at - bt : bt - at;
+      }
       if (av == null) av = sortDir === 'asc' ? Infinity : -Infinity;
       if (bv == null) bv = sortDir === 'asc' ? Infinity : -Infinity;
       if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
@@ -225,6 +249,14 @@ function QueriesTable({ records, navigate }) {
 
       <div className="queries-table-scroll">
         <table className="queries-table" aria-label="Recent queries">
+          <colgroup>
+            <col style={{ width: '170px' }} />
+            <col style={{ width: 'auto' }} />
+            <col style={{ width: '150px' }} />
+            <col style={{ width: '120px' }} />
+            <col style={{ width: '90px' }} />
+            <col style={{ width: '110px' }} />
+          </colgroup>
           <thead>
             <tr>
               <th
@@ -232,7 +264,9 @@ function QueriesTable({ records, navigate }) {
                 onClick={() => handleSort('timestamp')}
                 aria-sort={sortKey === 'timestamp' ? sortDir : 'none'}
               >
-                Time <TableSortIcon k="timestamp" sortKey={sortKey} sortDir={sortDir} />
+                <span className="queries-table__th-content">
+                  Time <TableSortIcon k="timestamp" sortKey={sortKey} sortDir={sortDir} />
+                </span>
               </th>
               <th className="queries-table__th">Question</th>
               <th
@@ -240,22 +274,28 @@ function QueriesTable({ records, navigate }) {
                 onClick={() => handleSort('model')}
                 aria-sort={sortKey === 'model' ? sortDir : 'none'}
               >
-                Model <TableSortIcon k="model" sortKey={sortKey} sortDir={sortDir} />
+                <span className="queries-table__th-content">
+                  Model <TableSortIcon k="model" sortKey={sortKey} sortDir={sortDir} />
+                </span>
               </th>
               <th
-                className="queries-table__th sortable"
+                className="queries-table__th queries-table__th--right sortable"
                 onClick={() => handleSort('total_latency_ms')}
                 aria-sort={sortKey === 'total_latency_ms' ? sortDir : 'none'}
               >
-                Latency <TableSortIcon k="total_latency_ms" sortKey={sortKey} sortDir={sortDir} />
+                <span className="queries-table__th-content">
+                  Latency <TableSortIcon k="total_latency_ms" sortKey={sortKey} sortDir={sortDir} />
+                </span>
               </th>
               <th className="queries-table__th">Cache</th>
               <th
-                className="queries-table__th sortable"
+                className="queries-table__th queries-table__th--right sortable"
                 onClick={() => handleSort('total_cost_usd')}
                 aria-sort={sortKey === 'total_cost_usd' ? sortDir : 'none'}
               >
-                Cost <TableSortIcon k="total_cost_usd" sortKey={sortKey} sortDir={sortDir} />
+                <span className="queries-table__th-content">
+                  Cost <TableSortIcon k="total_cost_usd" sortKey={sortKey} sortDir={sortDir} />
+                </span>
               </th>
             </tr>
           </thead>
@@ -272,20 +312,17 @@ function QueriesTable({ records, navigate }) {
                   title="Click for full trace"
                 >
                   <td className="queries-table__td mono">
-                    {row.timestamp
-                      ? new Date(row.timestamp).toLocaleTimeString()
-                      : '—'}
+                    {formatQueryTime(row.timestamp)}
                   </td>
-                  <td className="queries-table__td queries-table__question">
-                    {(row.question || row.query || '—').slice(0, 80)}
-                    {(row.question || row.query || '').length > 80 ? '…' : ''}
+                  <td className="queries-table__td queries-table__question" title={row.question || row.query || ''}>
+                    {row.question || row.query || '—'}
                   </td>
                   <td className="queries-table__td">
                     {row.model ? (
                       <span className="badge badge-accent2">{row.model}</span>
                     ) : '—'}
                   </td>
-                  <td className="queries-table__td mono">
+                  <td className="queries-table__td queries-table__td--right mono">
                     {fmtMs(row.total_latency_ms)}
                   </td>
                   <td className="queries-table__td">
@@ -295,7 +332,7 @@ function QueriesTable({ records, navigate }) {
                       <span className="badge badge-neutral">Miss</span>
                     )}
                   </td>
-                  <td className="queries-table__td mono">
+                  <td className="queries-table__td queries-table__td--right mono">
                     {fmtUsd(row.total_cost_usd)}
                   </td>
                 </motion.tr>
@@ -353,6 +390,7 @@ export default function MetricsPage() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [countdown, setCountdown] = useState(30);
   const [timeTab, setTimeTab] = useState('all');
+  const [stageMode, setStageMode] = useState('median'); // 'median' | 'average'
   const REFRESH_INTERVAL = 30_000;
 
   const fetchMetrics = useCallback(async (manual = false) => {
@@ -385,23 +423,38 @@ export default function MetricsPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Derived data
-  const stages = metrics?.latency_by_stage ?? {};
+  // Derived latency values
+  const medianLat = metrics?.p50_latency_ms ?? metrics?.median_latency_ms;
+  const avgLat = metrics?.avg_latency_ms;
+  const p95Lat = metrics?.p95_latency_ms;
+
+  // Query stages only: Average | Median breakdown (default Median)
+  const activeStages = stageMode === 'median'
+    ? (metrics?.median_latency_by_stage ?? metrics?.p50_latency_by_stage ?? metrics?.latency_by_stage ?? {})
+    : (metrics?.latency_by_stage ?? {});
+
   const stageList = [
-    { label: 'Embedding',  ms: stages.embedding_ms,  color: 'var(--color-embed)' },
-    { label: 'Retrieval',  ms: stages.retrieval_ms,  color: 'var(--color-retrieve)' },
-    { label: 'Reranking',  ms: stages.reranking_ms,  color: 'var(--color-rerank)' },
-    { label: 'LLM',        ms: stages.llm_ms,        color: 'var(--color-llm)' },
-    { label: 'ADE',        ms: stages.ade_ms,        color: 'var(--color-ade)' },
-  ].filter((s) => s.ms != null).sort((a, b) => b.ms - a.ms);
+    { label: 'Embedding',  ms: activeStages.embedding_ms,  color: 'var(--color-embed)' },
+    { label: 'Retrieval',  ms: activeStages.retrieval_ms,  color: 'var(--color-retrieve)' },
+    { label: 'Reranking',  ms: activeStages.reranking_ms,  color: 'var(--color-rerank)' },
+    { label: 'LLM',        ms: activeStages.llm_ms,        color: 'var(--color-llm)' },
+  ].filter((s) => s.ms != null && s.ms > 0).sort((a, b) => b.ms - a.ms);
 
   const maxStageMs = Math.max(...stageList.map((s) => s.ms), 1);
   const totalStageMs = stageList.reduce((acc, s) => acc + s.ms, 0);
 
+  // Insight computed strictly over query stages
   const topStage = stageList[0];
   const stageInsight = topStage && totalStageMs > 0
     ? `${topStage.label} accounts for ${Math.round((topStage.ms / totalStageMs) * 100)}% of pipeline time`
     : null;
+
+  // Ingestion stats
+  const ingestionStats = metrics?.ingestion_stats;
+  const docsIngested = ingestionStats?.documents_ingested ?? metrics?.ingestion_count ?? 0;
+  const avgAdeMs = ingestionStats?.avg_ade_ms ?? metrics?.latency_by_stage?.ade_ms;
+  const medianAdeMs = ingestionStats?.median_ade_ms ?? metrics?.median_latency_by_stage?.ade_ms;
+  const adeCredits = ingestionStats?.total_ade_credits ?? metrics?.total_ade_credits ?? 0;
 
   const records = metrics?.recent_queries ?? [];
   const showTimeTabs = hasTimestamps(records);
@@ -504,14 +557,32 @@ export default function MetricsPage() {
                 />
                 <StatCard
                   icon={Clock}
-                  label="Avg End-to-End"
-                  value={fmtMs(metrics.avg_latency_ms)}
+                  label="Median Latency"
+                  value={fmtMs(medianLat != null ? medianLat : avgLat)}
+                  sub={
+                    (avgLat != null || p95Lat != null) ? (
+                      <span className="metrics-kpi-secondary">
+                        <span>Avg: <strong className="mono">{fmtMs(avgLat)}</strong></span>
+                        <span className="metrics-kpi-secondary__sep">·</span>
+                        <span>P95: <strong className="mono">{fmtMs(p95Lat)}</strong></span>
+                      </span>
+                    ) : undefined
+                  }
                   accent
                 />
                 <StatCard
                   icon={BarChart3}
                   label="P95 Latency"
-                  value={fmtMs(metrics.p95_latency_ms)}
+                  value={fmtMs(p95Lat)}
+                  sub={
+                    medianLat != null ? (
+                      <span className="metrics-kpi-secondary">
+                        <span>Median: <strong className="mono">{fmtMs(medianLat)}</strong></span>
+                        <span className="metrics-kpi-secondary__sep">·</span>
+                        <span>Avg: <strong className="mono">{fmtMs(avgLat)}</strong></span>
+                      </span>
+                    ) : '95th percentile'
+                  }
                 />
               </div>
 
@@ -536,7 +607,27 @@ export default function MetricsPage() {
           {/* ── Latency breakdown ────────────────────────────────── */}
           <section className="metrics-section" aria-label="Latency breakdown">
             <div className="metrics-section-header">
-              <h2 className="metrics-section-title">Latency Breakdown</h2>
+              <div className="metrics-title-group">
+                <h2 className="metrics-section-title">Latency Breakdown</h2>
+                <div className="metrics-segmented-toggle" role="group" aria-label="Latency stage breakdown mode">
+                  <button
+                    type="button"
+                    className={`metrics-segmented-btn ${stageMode === 'median' ? 'metrics-segmented-btn--active' : ''}`}
+                    onClick={() => setStageMode('median')}
+                    aria-pressed={stageMode === 'median'}
+                  >
+                    Median
+                  </button>
+                  <button
+                    type="button"
+                    className={`metrics-segmented-btn ${stageMode === 'average' ? 'metrics-segmented-btn--active' : ''}`}
+                    onClick={() => setStageMode('average')}
+                    aria-pressed={stageMode === 'average'}
+                  >
+                    Average
+                  </button>
+                </div>
+              </div>
               {stageInsight && (
                 <span className="metrics-insight">💡 {stageInsight}</span>
               )}
@@ -555,18 +646,45 @@ export default function MetricsPage() {
                     />
                   ))
                 ) : (
-                  <p className="metrics-no-data">No stage timing data yet</p>
+                  <p className="metrics-no-data">No query stage timing data yet</p>
                 )}
               </div>
               <div className="metrics-latency-side">
                 <div className="metrics-latency-comparison">
+                  <div className="metrics-latency-comparison__title">End-to-End Latency</div>
+                  <div className="metrics-latency-comparison__row metrics-latency-comparison__row--accent">
+                    <span>Median E2E</span>
+                    <span className="mono">{fmtMs(medianLat != null ? medianLat : avgLat)}</span>
+                  </div>
                   <div className="metrics-latency-comparison__row">
                     <span>Avg E2E</span>
-                    <span className="mono">{fmtMs(metrics.avg_latency_ms)}</span>
+                    <span className="mono">{fmtMs(avgLat)}</span>
                   </div>
-                  <div className="metrics-latency-comparison__row metrics-latency-comparison__row--accent">
+                  <div className="metrics-latency-comparison__row">
                     <span>P95 E2E</span>
-                    <span className="mono">{fmtMs(metrics.p95_latency_ms)}</span>
+                    <span className="mono">{fmtMs(p95Lat)}</span>
+                  </div>
+                </div>
+
+                {/* Separate small Ingestion panel */}
+                <div className="metrics-ingestion-panel">
+                  <div className="metrics-ingestion-panel__header">
+                    <span className="metrics-ingestion-panel__title">Ingestion (ADE)</span>
+                    <span className="badge badge-accent2">{docsIngested} {docsIngested === 1 ? 'doc' : 'docs'}</span>
+                  </div>
+                  <div className="metrics-ingestion-panel__rows">
+                    <div className="metrics-ingestion-panel__row">
+                      <span>Median ADE / Doc</span>
+                      <span className="mono">{fmtMs(medianAdeMs)}</span>
+                    </div>
+                    <div className="metrics-ingestion-panel__row">
+                      <span>Avg ADE / Doc</span>
+                      <span className="mono">{fmtMs(avgAdeMs)}</span>
+                    </div>
+                    <div className="metrics-ingestion-panel__row">
+                      <span>ADE Credits</span>
+                      <span className="mono">{fmt(adeCredits, 2)}</span>
+                    </div>
                   </div>
                 </div>
               </div>

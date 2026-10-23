@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RouteType(str, Enum):
@@ -57,6 +57,12 @@ class RerankResult(BaseModel):
     relevance_score: float
 
 
+class HistoryMessage(BaseModel):
+    """A single turn in the conversation history sent from the client."""
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str = Field(..., description="Message content (truncated to 500 chars server-side)")
+
+
 class QueryRequest(BaseModel):
     """User query request payload."""
     query: str = Field(
@@ -79,6 +85,42 @@ class QueryRequest(BaseModel):
         default="groq",
         description="Preferred LLM provider: 'groq' (Qwen 3.8 27B) or 'openrouter' (Nemotron 120B)"
     )
+    history: Optional[List[HistoryMessage]] = Field(
+        default=None,
+        description=(
+            "Optional conversation history (last 3 turns = at most 6 messages). "
+            "Used only for follow-up query rewriting; never affects document scoping."
+        ),
+    )
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def _validate_history(
+        cls, v: Optional[List[Any]]
+    ) -> Optional[List[dict]]:
+        """Sanitize history: cap at 6 messages, truncate content to 500 chars, drop invalid entries."""
+        if v is None:
+            return None
+        cleaned: List[dict] = []
+        for item in v:
+            try:
+                if isinstance(item, dict):
+                    role = str(item.get("role", "")).strip().lower()
+                    content = str(item.get("content", "")).strip()
+                elif hasattr(item, "role") and hasattr(item, "content"):
+                    role = str(item.role).strip().lower()
+                    content = str(item.content).strip()
+                else:
+                    continue  # Drop malformed
+                if role not in ("user", "assistant"):
+                    continue  # Drop invalid roles
+                if not content:
+                    continue  # Drop empty content
+                cleaned.append({"role": role, "content": content[:500]})
+            except Exception:  # noqa: BLE001
+                continue  # Drop anything that can't be parsed
+        # Cap at 6 messages (last 3 turns)
+        return cleaned[-6:] if cleaned else None
 
     class Config:
         json_schema_extra = {
@@ -86,7 +128,11 @@ class QueryRequest(BaseModel):
                 "query": "What was the total revenue in Q3?",
                 "document_ids": ["abc123"],
                 "top_k": 5,
-                "llm_provider": "groq"
+                "llm_provider": "groq",
+                "history": [
+                    {"role": "user", "content": "What does this policy cover?"},
+                    {"role": "assistant", "content": "It covers full-time employees."},
+                ]
             }
         }
 
@@ -129,6 +175,20 @@ class QueryResponse(BaseModel):
         description="Token counts: {input_tokens, output_tokens, total_tokens}"
     )
     cost_usd: float = Field(default=0.0, description="Estimated cost in USD for this query")
+
+    # ── Rewrite fields (additive, optional) ───────────────────────────────────
+    standalone_query: Optional[str] = Field(
+        default=None,
+        description="Rewritten standalone version of the query (set only when it differs from original)",
+    )
+    rewrite_applied: bool = Field(
+        default=False,
+        description="True if the follow-up rewriter changed the query",
+    )
+    rewrite_ms: float = Field(
+        default=0.0,
+        description="Time spent in the query rewriter in milliseconds",
+    )
 
     model_config = {
         "protected_namespaces": (),

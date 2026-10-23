@@ -136,6 +136,14 @@ class StageLatency(BaseModel):
     ade_ms: float = 0.0
 
 
+class IngestionStats(BaseModel):
+    """Aggregated document ingestion metrics."""
+    documents_ingested: int = 0
+    avg_ade_ms: float = 0.0
+    median_ade_ms: float = 0.0
+    total_ade_credits: float = 0.0
+
+
 class MetricsResponse(BaseModel):
     """
     Aggregated metrics response from GET /metrics.
@@ -149,8 +157,12 @@ class MetricsResponse(BaseModel):
 
     # Latency
     avg_latency_ms: float = 0.0
+    p50_latency_ms: float = 0.0
+    median_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
     latency_by_stage: StageLatency = Field(default_factory=StageLatency)
+    median_latency_by_stage: StageLatency = Field(default_factory=StageLatency)
+    p50_latency_by_stage: StageLatency = Field(default_factory=StageLatency)
 
     # Tokens & cost
     total_tokens: int = 0
@@ -158,8 +170,11 @@ class MetricsResponse(BaseModel):
     total_embedding_cost_usd: float = 0.0
     total_llm_cost_usd: float = 0.0
 
-    # ADE
+    # ADE / Ingestion
     total_ade_credits: float = 0.0
+    ingestion_stats: IngestionStats = Field(default_factory=IngestionStats)
+    avg_ade_latency_ms: float = 0.0
+    median_ade_latency_ms: float = 0.0
 
     # Meta
     records_analyzed: int = 0

@@ -109,6 +109,7 @@ export function PageEvidence({
 
         const isActive = chunk.chunk_id === activeChunkId;
         const rank = chunk.rank || activeRank;
+        const isNearTop = (bbox[1] || 0) < 0.045;
 
         return (
           <div
@@ -122,7 +123,13 @@ export function PageEvidence({
             style={{ left, top, width, height }}
             title={`Source #${rank} (${formatRelevance(chunk.relevance_score).label}, raw: ${formatRelevance(chunk.relevance_score).raw})`}
           >
-            <span className="bbox-overlay__badge">#{rank}</span>
+            <span
+              className={`bbox-overlay__badge ${
+                isNearTop ? 'bbox-overlay__badge--below' : 'bbox-overlay__badge--above'
+              }`}
+            >
+              #{rank}
+            </span>
           </div>
         );
       });

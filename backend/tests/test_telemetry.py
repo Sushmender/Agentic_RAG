@@ -339,3 +339,71 @@ class TestMetricsEndpoint:
         assert data["ingestion_count"] == 1
         assert data["total_ade_credits"] == pytest.approx(3.0, rel=1e-3)
         assert data["records_analyzed"] == 2
+        assert "p50_latency_ms" in data
+        assert "median_latency_by_stage" in data
+        assert "ingestion_stats" in data
+
+    @pytest.mark.asyncio
+    async def test_p50_and_median_stage_latency(self, isolated_telemetry_file):
+        """p50 (median) latency and per-stage medians computed accurately."""
+        # Query 1: total 1000, emb 100, ret 50, rerank 150, llm 700
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=1000.0, embedding_ms=100.0, retrieval_ms=50.0, reranking_ms=150.0, llm_ms=700.0)
+        ))
+        # Query 2: total 2000, emb 200, ret 100, rerank 200, llm 1500
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=2000.0, embedding_ms=200.0, retrieval_ms=100.0, reranking_ms=200.0, llm_ms=1500.0)
+        ))
+        # Query 3: total 9000, emb 300, ret 150, rerank 250, llm 8300
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=9000.0, embedding_ms=300.0, retrieval_ms=150.0, reranking_ms=250.0, llm_ms=8300.0)
+        ))
+
+        m = await telemetry_service.compute_metrics()
+        assert m.p50_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.median_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.avg_latency_ms == pytest.approx(4000.0, rel=1e-3)
+
+        # Per-stage medians
+        assert m.median_latency_by_stage.embedding_ms == pytest.approx(200.0, rel=1e-3)
+        assert m.median_latency_by_stage.retrieval_ms == pytest.approx(100.0, rel=1e-3)
+        assert m.median_latency_by_stage.reranking_ms == pytest.approx(200.0, rel=1e-3)
+        assert m.median_latency_by_stage.llm_ms == pytest.approx(1500.0, rel=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_ingestion_separated_from_query(self, isolated_telemetry_file):
+        """Query stages and latency metrics must exclude ingestion ADE times, which are exposed via ingestion_stats."""
+        # 2 Queries
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=1000.0, embedding_ms=100.0, retrieval_ms=100.0, reranking_ms=100.0, llm_ms=700.0)
+        ))
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=3000.0, embedding_ms=300.0, retrieval_ms=200.0, reranking_ms=200.0, llm_ms=2300.0)
+        ))
+
+        # 3 Ingestions with heavy ADE times
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=10000.0, ade_ms=9000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=2.5)
+        ))
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=20000.0, ade_ms=19000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=3.5)
+        ))
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=30000.0, ade_ms=29000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=4.0)
+        ))
+
+        m = await telemetry_service.compute_metrics()
+        # Query latencies must NOT be inflated by ingestion records
+        assert m.query_count == 2
+        assert m.avg_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.p50_latency_ms == pytest.approx(1000.0, rel=1e-3)
+
+        # Ingestion stats exposed separately
+        assert m.ingestion_stats.documents_ingested == 3
+        assert m.ingestion_stats.avg_ade_ms == pytest.approx(19000.0, rel=1e-3)
+        assert m.ingestion_stats.median_ade_ms == pytest.approx(19000.0, rel=1e-3)
+        assert m.ingestion_stats.total_ade_credits == pytest.approx(10.0, rel=1e-3)
+

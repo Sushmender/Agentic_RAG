@@ -583,15 +583,51 @@ export function ChatProvider({ children }) {
       const controller = new AbortController();
       abortControllersRef.current.set(assistantMsgId, controller);
 
+      // Build conversation history: last 3 completed Q/A pairs before this message.
+      // Skip pending and error messages. Strip citation markers [N] and markdown from answers.
+      const stripCitations = (text) => (text || '').replace(/\[\d+\]/g, '').trim();
+      const stripMarkdown = (text) =>
+        (text || '')
+          .replace(/\*\*([^*]+)\*\*/g, '$1')
+          .replace(/\*([^*]+)\*/g, '$1')
+          .replace(/`([^`]+)`/g, '$1')
+          .replace(/#{1,6}\s+/g, '')
+          .replace(/\n{2,}/g, ' ')
+          .replace(/\n/g, ' ')
+          .trim();
+
+      const completedMsgs = (currentTab.messages || []).filter(
+        (m) => !m.pending && !m.error
+      );
+      const historyPairs = [];
+      for (let i = 0; i < completedMsgs.length - 1; i++) {
+        const m = completedMsgs[i];
+        const nx = completedMsgs[i + 1];
+        if (m.type === 'user' && nx.type === 'assistant') {
+          historyPairs.push({ u: m.content, a: stripMarkdown(stripCitations(nx.content)) });
+          i++;
+        }
+      }
+      const recentPairs = historyPairs.slice(-3);
+      const history =
+        recentPairs.length > 0
+          ? recentPairs.flatMap((p) => [
+              { role: 'user', content: p.u },
+              { role: 'assistant', content: p.a },
+            ])
+          : undefined;
+
       try {
         const res = await queryAPI.query(
           {
             query: q,
             document_ids: docIds.length > 0 ? docIds : null,
             llm_provider: model,
+            ...(history ? { history } : {}),
           },
           { signal: controller.signal }
         );
+
 
         dispatch({
           type: 'UPDATE_MESSAGE',

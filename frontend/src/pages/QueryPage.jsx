@@ -694,7 +694,7 @@ function SourceCard({ source, rank, isHighlighted, allSources = [], answer = '',
 }
 
 /* ── Trace panel ────────────────────────────────────────────── */
-function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit }) {
+function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit, standaloneQuery }) {
   const stages = [
     {
       label: 'Embedding',
@@ -712,6 +712,28 @@ function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit
 
   return (
     <div className="trace-panel">
+      {standaloneQuery && (
+        <div
+          className="trace-section"
+          style={{ paddingBottom: '10px', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+          title="Your follow-up was rewritten so it can be searched"
+        >
+          <span
+            style={{
+              fontSize: '11px',
+              color: 'var(--text-muted, rgba(255,255,255,0.45))',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '6px',
+            }}
+          >
+            <span style={{ whiteSpace: 'nowrap', paddingTop: '1px' }}>🔍 Interpreted as:</span>
+            <em style={{ fontStyle: 'normal', color: 'var(--text-secondary, rgba(255,255,255,0.65))' }}>
+              {standaloneQuery}
+            </em>
+          </span>
+        </div>
+      )}
       <div className="trace-section">
         <h4 className="trace-section__title">Latency Breakdown</h4>
         {stages.map(({ label, ms, color, attempts, cached }) => {
@@ -1583,6 +1605,7 @@ function QueryPageInner() {
                   costUsd={lastResult.cost_usd}
                   embedAttempts={lastResult.embed_attempts}
                   embedCacheHit={lastResult.embed_cache_hit}
+                  standaloneQuery={lastResult.standalone_query || null}
                 />
                 )}
               </div>

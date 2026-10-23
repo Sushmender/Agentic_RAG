@@ -40,6 +40,7 @@ from app.services import cache_service, telemetry_service
 from app.services.context_assembly import assemble_context, _clean_text
 from app.services.llm_service import generate_answer
 from app.services.query_router import route_query
+from app.services.query_rewriter import rewrite_query
 from app.services.retrieval_service import (
     DEFAULT_TOP_N,
     retrieve_hybrid,
@@ -136,19 +137,46 @@ async def query(
 
     log.info("Query pipeline started")
 
+    # ── Step 0a-pre: Rewrite follow-up query ─────────────────────────────────
+    # History is untrusted client data; used ONLY by the rewriter, never for
+    # document scoping or ownership checks.
+    history_payload = [
+        {"role": m.role, "content": m.content}
+        for m in (request.history or [])
+    ]
+    rewrite_result = await rewrite_query(
+        query=request.query,
+        history=history_payload or None,
+    )
+    standalone = rewrite_result.standalone_query  # may equal request.query
+
+    if rewrite_result.applied:
+        log = log.bind(
+            rewrite_applied=True,
+            standalone_preview=standalone[:80],
+        )
+
     # ── Step 0b: Cache check (Day 6) ──────────────────────────────────────────
+    # Use standalone (rewritten) query as the cache key so follow-ups from
+    # different conversations don't collide with each other.
     cache_check_start = time.monotonic()
     cached = await cache_service.get_cached_response(
         user_id=user_id,
         document_ids=request.document_ids,
-        query=request.query,
+        query=standalone,
         all_document_ids=caller_doc_ids,
     )
     cache_check_ms = round((time.monotonic() - cache_check_start) * 1000, 1)
 
+
     if cached is not None:
         log.info("Serving from cache", cache_check_ms=cache_check_ms)
         cached.latency.cache_check_ms = cache_check_ms
+        # Annotate with rewrite info even on cache hits
+        if rewrite_result.applied:
+            cached.standalone_query = standalone
+            cached.rewrite_applied = True
+            cached.rewrite_ms = rewrite_result.rewrite_ms
         
         # ── Append telemetry for cache hit ──────────────────────────────────
         from app.schemas.telemetry import (
@@ -192,13 +220,13 @@ async def query(
     log.info("Cache miss", cache_check_ms=cache_check_ms)
 
     # ── Step 1: Route ─────────────────────────────────────────────────────────
-    route = route_query(request.query)
+    route = route_query(standalone)   # route on the rewritten query
     log.info("Query routed", route=route.value)
 
     # ── Step 2: Embed query ───────────────────────────────────────────────────
     embed_start = time.monotonic()
     try:
-        query_embedding = await embedding_provider.embed_query(request.query)
+        query_embedding = await embedding_provider.embed_query(standalone)
         embed_meta = (
             embedding_provider.get_last_query_meta()
             if hasattr(embedding_provider, "get_last_query_meta")
@@ -288,7 +316,7 @@ async def query(
 
 
         reranked_dicts = await reranker_provider.rerank(
-            query=request.query,
+            query=standalone,
             candidates=candidate_dicts,
             top_k=top_k,
         )
@@ -328,7 +356,7 @@ async def query(
     # ── Step 5: Assemble grounded context ─────────────────────────────────────
     assembled = assemble_context(
         candidates=reranked_candidates,
-        query=request.query,
+        query=standalone,
         top_k=top_k,
         max_tokens=cfg.MAX_CONTEXT_TOKENS,
     )
@@ -344,7 +372,7 @@ async def query(
     try:
         llm_result = await generate_answer(
             assembled=assembled,
-            query=request.query,
+            query=standalone,
             preferred_provider=preferred_provider,
             max_tokens=1024,
         )
@@ -369,6 +397,7 @@ async def query(
         llm_ms=llm_ms,
         total_tokens=llm_result.total_tokens,
         cost_usd=llm_result.cost_usd,
+        rewrite_applied=rewrite_result.applied,
     )
 
     # ── Build sources (from selected chunks after context assembly) ────────────
@@ -396,18 +425,22 @@ async def query(
             llm_ms=llm_ms,
         ),
         token_usage={
-            "input_tokens": llm_result.input_tokens,
-            "output_tokens": llm_result.output_tokens,
-            "total_tokens": llm_result.total_tokens,
+            "input_tokens": llm_result.input_tokens + rewrite_result.input_tokens,
+            "output_tokens": llm_result.output_tokens + rewrite_result.output_tokens,
+            "total_tokens": llm_result.total_tokens + rewrite_result.total_tokens,
         },
-        cost_usd=llm_result.cost_usd,
+        cost_usd=llm_result.cost_usd + rewrite_result.cost_usd,
+        standalone_query=standalone if rewrite_result.applied else None,
+        rewrite_applied=rewrite_result.applied,
+        rewrite_ms=rewrite_result.rewrite_ms,
     )
 
     # ── Step 7: Store in cache (Day 6) ──────────────────────────────────
+    # Use standalone query as the cache key (same as the lookup above)
     await cache_service.set_cached_response(
         user_id=user_id,
         document_ids=request.document_ids,
-        query=request.query,
+        query=standalone,
         response=response,
         all_document_ids=caller_doc_ids,
     )
@@ -419,7 +452,7 @@ async def query(
     _tel = TelemetryRecord(
         record_type="query",
         user_id=user_id,
-        query_preview=request.query[:80],
+        query_preview=request.query[:80],   # always the original for telemetry
         route_type=route.value,
         cache_hit=False,
         embed_cache_hit=embed_cache_hit,
@@ -432,9 +465,9 @@ async def query(
             llm_ms=llm_ms,
         ),
         token_usage=TokenUsage(
-            input_tokens=llm_result.input_tokens,
-            output_tokens=llm_result.output_tokens,
-            total_tokens=llm_result.total_tokens,
+            input_tokens=llm_result.input_tokens + rewrite_result.input_tokens,
+            output_tokens=llm_result.output_tokens + rewrite_result.output_tokens,
+            total_tokens=llm_result.total_tokens + rewrite_result.total_tokens,
         ),
         embedding_cost=EmbeddingCost(
             model=settings.EMBEDDING_MODEL,
@@ -446,9 +479,9 @@ async def query(
         llm_cost=LLMCost(
             model=llm_result.model_used,
             provider=llm_result.provider_used,
-            input_tokens=llm_result.input_tokens,
-            output_tokens=llm_result.output_tokens,
-            cost_usd=llm_result.cost_usd,
+            input_tokens=llm_result.input_tokens + rewrite_result.input_tokens,
+            output_tokens=llm_result.output_tokens + rewrite_result.output_tokens,
+            cost_usd=llm_result.cost_usd + rewrite_result.cost_usd,
         ),
     )
     await telemetry_service.append_record(_tel)
