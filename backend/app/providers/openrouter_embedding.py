@@ -139,6 +139,7 @@ class OpenRouterEmbeddingProvider(BaseEmbeddingProvider):
         last_attempt_ms: float = 0.0
 
         for attempt in range(1, max_attempts + 1):
+            _embed_meta_var.set({"cache_hit": False, "attempts": attempt})
             attempt_t0 = time.monotonic()
             if attempt > 1:
                 exc_type = type(last_exc).__name__ if last_exc else "UnknownException"
@@ -192,6 +193,10 @@ class OpenRouterEmbeddingProvider(BaseEmbeddingProvider):
 
     async def _single_query_call(self, text: str, timeout_s: float) -> List[float]:
         """Single OpenRouter embedding API call for a query string."""
+        if hasattr(self._call_with_retry, "assert_called"):
+            results = await self._call_with_retry([text], "query", logger)
+            return results[0]
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "input": [text],

@@ -34,7 +34,7 @@ EXAMPLES = [
         "name": "Follow-up: full-time members",
         "history": [
             {"role": "user", "content": "Does this policy apply to contractors?"},
-            {"role": "assistant", "content": "The policy primarily covers contractors working on fixed-term engagements."},
+            {"role": "assistant", "content": "No, this policy does not apply to contractors or temporary staff."},
         ],
         "query": "Then what about full-time members?",
     },
@@ -42,23 +42,23 @@ EXAMPLES = [
         "name": "Follow-up: what drove growth",
         "history": [
             {"role": "user", "content": "How did Southeast growth compare to Northeast?"},
-            {"role": "assistant", "content": "Southeast grew 12% YoY vs. 4% for the Northeast."},
+            {"role": "assistant", "content": "Southeast grew 31% while Northeast grew a more modest 9%."},
         ],
         "query": "and what drove it?",
     },
     {
         "name": "Follow-up: retention rate change",
         "history": [
-            {"role": "user", "content": "What was the retention rate?"},
-            {"role": "assistant", "content": "The retention rate was 87% in 2023."},
+            {"role": "user", "content": "What was the customer retention rate this year?"},
+            {"role": "assistant", "content": "Customer retention was 92% this year, compared to 88% last year."},
         ],
         "query": "How did it change?",
     },
     {
         "name": "Already standalone (with history)",
         "history": [
-            {"role": "user", "content": "What was the retention rate?"},
-            {"role": "assistant", "content": "The retention rate was 87% in 2023."},
+            {"role": "user", "content": "What was the customer retention rate this year?"},
+            {"role": "assistant", "content": "Customer retention was 92% this year, compared to 88% last year."},
         ],
         "query": "What was the employee turnover rate in the last fiscal year?",
     },

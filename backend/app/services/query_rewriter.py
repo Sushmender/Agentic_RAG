@@ -54,6 +54,7 @@ class RewriteResult:
     output_tokens: int = 0
     total_tokens: int = 0
     cost_usd: float = 0.0
+    rewrite_method: Optional[str] = None  # "llm" or "fallback_concat"
     # Diagnostic fields (not sent to clients)
     _raw_output: Optional[str] = None
     _rejection_reason: Optional[str] = None
@@ -177,6 +178,33 @@ def _build_prompt(query: str, history: List[dict]) -> str:
     )
 
 
+def _extract_last_user_question(history: Optional[List[dict]]) -> Optional[str]:
+    """Find the most recent user question from conversation history."""
+    if not history:
+        return None
+    for turn in reversed(history):
+        role = turn.get("role", "") if isinstance(turn, dict) else getattr(turn, "role", "")
+        if str(role).strip().lower() == "user":
+            content = turn.get("content", "") if isinstance(turn, dict) else getattr(turn, "content", "")
+            if content and str(content).strip():
+                return str(content).strip()
+    return None
+
+
+def _build_fallback_query(query: str, history: Optional[List[dict]]) -> Optional[str]:
+    """
+    Build a deterministic fallback:
+    "{most recent user question from history, trailing '?' removed} {follow-up}",
+    capped at 300 characters.
+    """
+    last_user_q = _extract_last_user_question(history)
+    if not last_user_q:
+        return None
+    last_user_q_stripped = last_user_q.rstrip("?").rstrip()
+    fallback = f"{last_user_q_stripped} {query.strip()}".strip()
+    return fallback[:300]
+
+
 async def rewrite_query(
     query: str,
     history: Optional[List[dict]] = None,
@@ -189,7 +217,7 @@ async def rewrite_query(
         history: List of {role, content} dicts (at most 6), or None/empty.
 
     Returns:
-        RewriteResult with standalone_query, applied flag, latency, and token counts.
+        RewriteResult with standalone_query, applied flag, latency, token counts, and rewrite_method.
     """
     t0 = time.monotonic()
     cfg = get_settings()
@@ -240,18 +268,40 @@ async def rewrite_query(
                 query_preview=query[:80],
             )
 
-        if not sanitized or sanitized.lower() == query.lower():
-            if not rejection_reason and sanitized:
-                # LLM returned the same text — not a rejection, just not applied
-                logger.debug(
-                    "Rewriter output same as original — not applied",
-                    raw_output=raw_text,
-                    query_preview=query[:80],
-                )
-            # Rewriter returned the same text or invalid output — not applied
+        # Successful LLM rewrite: sanitized is non-empty, different from query, not rejected
+        if sanitized and not rejection_reason and sanitized.lower() != query.lower():
+            logger.info(
+                "Query rewritten",
+                original_preview=query[:80],
+                standalone_preview=sanitized[:80],
+                rewrite_ms=rewrite_ms,
+            )
             return RewriteResult(
-                standalone_query=query,
-                applied=False,
+                standalone_query=sanitized,
+                applied=True,
+                rewrite_method="llm",
+                rewrite_ms=rewrite_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cost_usd=cost_usd,
+            )
+
+        # LLM rewrite failed: rejected output or returned same bare follow-up
+        # When the query clearly needs context, do NOT search with bare follow-up; build deterministic fallback
+        fallback = _build_fallback_query(query, history)
+        if fallback:
+            logger.info(
+                "Query rewriter rejected/unusable — using fallback concatenated query",
+                rejection_reason=rejection_reason or ("same as original" if sanitized else "empty"),
+                query_preview=query[:80],
+                fallback_preview=fallback[:80],
+                rewrite_ms=rewrite_ms,
+            )
+            return RewriteResult(
+                standalone_query=fallback,
+                applied=True,
+                rewrite_method="fallback_concat",
                 rewrite_ms=rewrite_ms,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -261,25 +311,36 @@ async def rewrite_query(
                 _raw_output=raw_text,
             )
 
-        logger.info(
-            "Query rewritten",
-            original_preview=query[:80],
-            standalone_preview=sanitized[:80],
-            rewrite_ms=rewrite_ms,
-        )
-
+        # Fallback could not be constructed (e.g. no prior user message in history)
         return RewriteResult(
-            standalone_query=sanitized,
-            applied=True,
+            standalone_query=query,
+            applied=False,
             rewrite_ms=rewrite_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             cost_usd=cost_usd,
+            _rejection_reason=rejection_reason or ("same as original" if sanitized else None),
+            _raw_output=raw_text,
         )
 
     except asyncio.TimeoutError:
         rewrite_ms = round((time.monotonic() - t0) * 1000, 1)
+        fallback = _build_fallback_query(query, history)
+        if fallback:
+            logger.warning(
+                "Query rewriter timed out — using fallback concatenated query",
+                timeout_s=cfg.REWRITE_TIMEOUT_S,
+                query_preview=query[:80],
+                fallback_preview=fallback[:80],
+                rewrite_ms=rewrite_ms,
+            )
+            return RewriteResult(
+                standalone_query=fallback,
+                applied=True,
+                rewrite_method="fallback_concat",
+                rewrite_ms=rewrite_ms,
+            )
         logger.warning(
             "Query rewriter timed out — using original query",
             timeout_s=cfg.REWRITE_TIMEOUT_S,
@@ -290,6 +351,22 @@ async def rewrite_query(
 
     except Exception as exc:  # noqa: BLE001
         rewrite_ms = round((time.monotonic() - t0) * 1000, 1)
+        fallback = _build_fallback_query(query, history)
+        if fallback:
+            logger.warning(
+                "Query rewriter failed — using fallback concatenated query",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                query_preview=query[:80],
+                fallback_preview=fallback[:80],
+                rewrite_ms=rewrite_ms,
+            )
+            return RewriteResult(
+                standalone_query=fallback,
+                applied=True,
+                rewrite_method="fallback_concat",
+                rewrite_ms=rewrite_ms,
+            )
         logger.warning(
             "Query rewriter failed — using original query",
             error=str(exc),

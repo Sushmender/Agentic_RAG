@@ -201,9 +201,36 @@ function AssistantBubble({
         {result.cache_hit && (
           <span className="cache-chip"><Zap size={10} /> Cached</span>
         )}
-        {result.latency?.total_ms && (
-          <span className="latency-chip">
-            {result.latency.total_ms.toFixed(0)} ms
+        {(result.latency?.served_ms != null ? result.latency.served_ms : result.latency?.total_ms) && (
+          <span
+            className="latency-chip"
+            title={
+              result.latency?.served_ms != null
+                ? `Served from cache in ${result.latency.served_ms.toFixed(0)} ms (original pipeline: ${result.latency.total_ms.toFixed(0)} ms)`
+                : undefined
+            }
+          >
+            {(result.latency?.served_ms != null ? result.latency.served_ms : result.latency.total_ms).toFixed(0)} ms
+          </span>
+        )}
+        {result.degraded && (
+          <span
+            className="degraded-chip"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 7px',
+              borderRadius: '999px',
+              fontSize: '11px',
+              fontWeight: 500,
+              background: 'rgba(234, 179, 8, 0.15)',
+              color: 'var(--warn, #eab308)',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+            }}
+            title="Embedding provider slow: answered via BM25 lexical fallback"
+          >
+            Lexical Fallback
           </span>
         )}
         {result.model_used && (
@@ -694,7 +721,17 @@ function SourceCard({ source, rank, isHighlighted, allSources = [], answer = '',
 }
 
 /* ── Trace panel ────────────────────────────────────────────── */
-function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit, standaloneQuery }) {
+function TracePanel({
+  latency,
+  tokenUsage,
+  costUsd,
+  embedAttempts,
+  embedCacheHit,
+  standaloneQuery,
+  retrievalMode,
+  degraded,
+}) {
+  const isLexicalFallback = degraded || retrievalMode === 'lexical_fallback';
   const stages = [
     {
       label: 'Embedding',
@@ -702,8 +739,9 @@ function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit
       color: 'var(--color-embed)',
       attempts: embedAttempts,
       cached: embedCacheHit,
+      fallback: isLexicalFallback,
     },
-    { label: 'Retrieval',  ms: latency?.retrieval_ms,   color: 'var(--color-retrieve)' },
+    { label: 'Retrieval',  ms: latency?.retrieval_ms,   color: 'var(--color-retrieve)', mode: retrievalMode },
     { label: 'Reranking',  ms: latency?.reranking_ms,  color: 'var(--color-rerank)' },
     { label: 'LLM',        ms: latency?.llm_ms,         color: 'var(--color-llm)' },
   ];
@@ -727,7 +765,9 @@ function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit
               gap: '6px',
             }}
           >
-            <span style={{ whiteSpace: 'nowrap', paddingTop: '1px' }}>🔍 Interpreted as:</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap', paddingTop: '1px' }}>
+              <Sparkles size={12} style={{ opacity: 0.7 }} /> Interpreted as:
+            </span>
             <em style={{ fontStyle: 'normal', color: 'var(--text-secondary, rgba(255,255,255,0.65))' }}>
               {standaloneQuery}
             </em>
@@ -736,12 +776,42 @@ function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit
       )}
       <div className="trace-section">
         <h4 className="trace-section__title">Latency Breakdown</h4>
-        {stages.map(({ label, ms, color, attempts, cached }) => {
+        {stages.map(({ label, ms, color, attempts, cached, fallback, mode }) => {
           const pct = Math.min(((ms || 0) / maxMs) * 100, 100);
           return (
             <div key={label} className="trace-bar-row">
               <span className="trace-bar-label" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                 {label}
+                {fallback && (
+                  <span
+                    className="trace-fallback-badge"
+                    style={{
+                      fontSize: '10px',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      background: 'rgba(234, 179, 8, 0.15)',
+                      color: 'var(--warn, #eab308)',
+                      border: '1px solid rgba(234, 179, 8, 0.3)',
+                    }}
+                    title="Embedding provider timed out; skipped and fell back to BM25"
+                  >
+                    fallback
+                  </span>
+                )}
+                {mode === 'lexical_fallback' && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      background: 'rgba(56, 189, 248, 0.15)',
+                      color: 'var(--info, #38bdf8)',
+                      border: '1px solid rgba(56, 189, 248, 0.3)',
+                    }}
+                  >
+                    BM25
+                  </span>
+                )}
                 {attempts != null && attempts > 1 && (
                   <span
                     className="trace-attempt-badge"
@@ -781,7 +851,12 @@ function TracePanel({ latency, tokenUsage, costUsd, embedAttempts, embedCacheHit
           );
         })}
         <div className="trace-total">
-          Total: <strong>{fmt(latency?.total_ms)}</strong>
+          {latency?.served_ms != null && (
+            <div style={{ marginBottom: '2px', fontSize: '11px', color: 'var(--accent, #2de2a6)' }}>
+              Served in: <strong>{fmt(latency.served_ms)}</strong>
+            </div>
+          )}
+          Total (original): <strong>{fmt(latency?.total_ms)}</strong>
         </div>
       </div>
       {tokenUsage && (
@@ -1606,6 +1681,8 @@ function QueryPageInner() {
                   embedAttempts={lastResult.embed_attempts}
                   embedCacheHit={lastResult.embed_cache_hit}
                   standaloneQuery={lastResult.standalone_query || null}
+                  retrievalMode={lastResult.retrieval_mode}
+                  degraded={lastResult.degraded}
                 />
                 )}
               </div>

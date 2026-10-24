@@ -478,3 +478,74 @@ class TestInputValidation:
                 json={"query": FAKE_QUERY},
             )
         assert resp.status_code == 401
+
+
+class TestEmbeddingFailure:
+    """Embedding failure handling in query endpoint."""
+
+    def test_embedding_failure_falls_back_gracefully_to_lexical(self):
+        mock_log = MagicMock()
+        with patch(
+            "app.api.v1.endpoints.query.embedding_provider.embed_query",
+            AsyncMock(side_effect=RuntimeError("Provider timed out after retries")),
+        ):
+            with patch("app.api.v1.endpoints.query.embedding_provider.get_last_query_meta", return_value={"attempts": 2, "cache_hit": False}):
+                with patch("app.api.v1.endpoints.query.logger.bind", return_value=mock_log):
+                    with TestClient(app) as client:
+                        resp = client.post(
+                            "/api/v1/query",
+                            json={"query": FAKE_QUERY},
+                            headers=get_auth_headers(),
+                        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["retrieval_mode"] == "lexical_fallback"
+        assert data["degraded"] is True
+        # Verify warning log format
+        mock_log.warning.assert_called_once()
+        args, kwargs = mock_log.warning.call_args
+        assert args[0] == "Query embedding failed, falling back to lexical retrieval"
+        assert kwargs["error_class"] == "RuntimeError"
+        assert kwargs["attempts"] == 2
+        assert "elapsed_ms" in kwargs
+        assert "Provider timed out" in kwargs["error"]
+
+
+class TestFollowUpFallbackInPipeline:
+    """Follow-up fallback query rewriting within query pipeline."""
+
+    def test_pipeline_uses_fallback_concat_when_rewrite_fails(self):
+        patchers = make_all_patches()
+        async def mock_groq_gen(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                raise RuntimeError("Groq timeout")
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=mock_groq_gen):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={
+                            "query": "and what drove it?",
+                            "history": [
+                                {"role": "user", "content": "What was the total revenue in Q3?"},
+                                {"role": "assistant", "content": "Revenue was $100M."},
+                            ],
+                        },
+                        headers=get_auth_headers(),
+                    )
+        finally:
+            for p in patchers:
+                p.stop()
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["rewrite_applied"] is True
+        assert data["rewrite_method"] == "fallback_concat"
+        assert data["standalone_query"] == "What was the total revenue in Q3 and what drove it?"
+

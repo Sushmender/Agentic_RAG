@@ -161,7 +161,7 @@ async def test_long_standalone_no_markers_no_llm_call():
 
 @pytest.mark.asyncio
 async def test_followup_rewritten_and_propagated():
-    """Follow-up with history: the rewritten text is returned with applied=True."""
+    """Follow-up with history: the rewritten text is returned with applied=True and rewrite_method='llm'."""
     with patch(
         "app.services.query_rewriter.groq_provider.generate",
         new_callable=AsyncMock,
@@ -174,6 +174,7 @@ async def test_followup_rewritten_and_propagated():
 
     mock_gen.assert_called_once()
     assert result.applied is True
+    assert result.rewrite_method == "llm"
     assert result.standalone_query == "Does the policy apply to full-time members?"
     assert result.input_tokens == 120
     assert result.output_tokens == 10
@@ -182,7 +183,7 @@ async def test_followup_rewritten_and_propagated():
 
 @pytest.mark.asyncio
 async def test_rewriter_timeout_falls_back():
-    """Timeout → original query returned, applied=False, no exception raised."""
+    """Timeout → deterministic fallback query returned with applied=True, rewrite_method='fallback_concat'."""
     async def slow_generate(**kwargs):
         await asyncio.sleep(999)
 
@@ -199,13 +200,14 @@ async def test_rewriter_timeout_falls_back():
                 history=FAKE_HISTORY,
             )
 
-    assert result.applied is False
-    assert result.standalone_query == "Then what about full-time members?"
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "Does this policy apply to contractors Then what about full-time members?"
 
 
 @pytest.mark.asyncio
 async def test_rewriter_exception_falls_back():
-    """Any exception → original returned, no propagation."""
+    """Any exception → deterministic fallback query returned with applied=True, rewrite_method='fallback_concat'."""
     with patch(
         "app.services.query_rewriter.groq_provider.generate",
         new_callable=AsyncMock,
@@ -216,13 +218,14 @@ async def test_rewriter_exception_falls_back():
             history=FAKE_HISTORY,
         )
 
-    assert result.applied is False
-    assert result.standalone_query == "Then what about full-time members?"
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "Does this policy apply to contractors Then what about full-time members?"
 
 
 @pytest.mark.asyncio
 async def test_multiline_output_rejected():
-    """Multi-line rewriter output → rejected, original returned."""
+    """Multi-line rewriter output → rejected, produces deterministic fallback."""
     multiline_response = {**FAKE_GROQ_RESPONSE, "content": "Line one\nLine two"}
     with patch(
         "app.services.query_rewriter.groq_provider.generate",
@@ -234,13 +237,14 @@ async def test_multiline_output_rejected():
             history=FAKE_HISTORY,
         )
 
-    assert result.applied is False
-    assert result.standalone_query == "Then what about full-time members?"
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "Does this policy apply to contractors Then what about full-time members?"
 
 
 @pytest.mark.asyncio
 async def test_overlong_output_rejected():
-    """Output > 300 chars → rejected, original returned."""
+    """Output > 300 chars → rejected, produces deterministic fallback."""
     long_response = {**FAKE_GROQ_RESPONSE, "content": "A" * 301}
     with patch(
         "app.services.query_rewriter.groq_provider.generate",
@@ -252,7 +256,9 @@ async def test_overlong_output_rejected():
             history=FAKE_HISTORY,
         )
 
-    assert result.applied is False
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "Does this policy apply to contractors Then what?"
 
 
 @pytest.mark.asyncio
@@ -279,7 +285,7 @@ async def test_think_block_stripped():
 
 @pytest.mark.asyncio
 async def test_think_only_output_falls_back():
-    """Output that is only a <think> block → rejected, falls back to original."""
+    """Output that is only a <think> block → rejected, falls back to deterministic fallback."""
     think_only = {**FAKE_GROQ_RESPONSE, "content": "<think>All reasoning, no question.</think>"}
     with patch(
         "app.services.query_rewriter.groq_provider.generate",
@@ -291,7 +297,44 @@ async def test_think_only_output_falls_back():
             history=FAKE_HISTORY,
         )
 
-    assert result.applied is False
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "Does this policy apply to contractors Then what?"
+
+
+@pytest.mark.asyncio
+async def test_fallback_concat_capped_at_300_chars():
+    """Fallback concatenated query is strictly capped at 300 characters."""
+    long_q = "Q" * 250
+    follow_up = "and " + ("F" * 100)
+    history = [{"role": "user", "content": long_q}]
+    with patch(
+        "app.services.query_rewriter.groq_provider.generate",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("groq down"),
+    ):
+        result = await rewrite_query(follow_up, history=history)
+
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert len(result.standalone_query) == 300
+    assert result.standalone_query.startswith("Q" * 250 + " and ")
+
+
+@pytest.mark.asyncio
+async def test_fallback_removes_trailing_question_mark():
+    """Trailing '?' is stripped from the preceding user question."""
+    history = [{"role": "user", "content": "What drove total revenue in Q3???"}]
+    with patch(
+        "app.services.query_rewriter.groq_provider.generate",
+        new_callable=AsyncMock,
+        side_effect=asyncio.TimeoutError(),
+    ):
+        result = await rewrite_query("and what about net margin?", history=history)
+
+    assert result.applied is True
+    assert result.rewrite_method == "fallback_concat"
+    assert result.standalone_query == "What drove total revenue in Q3 and what about net margin?"
 
 
 @pytest.mark.asyncio

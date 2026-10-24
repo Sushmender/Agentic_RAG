@@ -682,6 +682,11 @@ export function ChatProvider({ children }) {
           (detail === 'Document not found' ||
            detail?.toLowerCase().includes('document not found'));
 
+        const isSearchSlow =
+          status === 502 &&
+          typeof detail === 'string' &&
+          detail.includes('The search service is slow right now');
+
         if (isDocNotFound) {
           msg = 'That document is no longer available';
           // Remove stale document(s) from that tab's filter chips
@@ -695,6 +700,8 @@ export function ChatProvider({ children }) {
               updates: { docIds: updatedDocIds },
             },
           });
+        } else if (isSearchSlow) {
+          msg = detail;
         } else if (isTimeout) {
           msg = 'The model took too long to respond. Try again or switch model.';
         } else if (status === 429) {
@@ -716,8 +723,8 @@ export function ChatProvider({ children }) {
           },
         });
 
-        // Show toast for unexpected errors; timeouts and missing docs are shown inline
-        if (!isTimeout && !isDocNotFound) {
+        // Show toast for unexpected errors; timeouts, missing docs, and slow search are shown inline
+        if (!isTimeout && !isDocNotFound && !isSearchSlow) {
           toast.error(msg);
         }
       } finally {

@@ -145,6 +145,11 @@ class LatencyBreakdown(BaseModel):
     retrieval_ms: float = 0.0
     reranking_ms: float = 0.0
     llm_ms: float = 0.0
+    # Phase 3: actual served latency when answer comes from cache
+    served_ms: Optional[float] = Field(
+        default=None,
+        description="Actual time to serve this response (differs from total_ms on cache hits)",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -185,9 +190,23 @@ class QueryResponse(BaseModel):
         default=False,
         description="True if the follow-up rewriter changed the query",
     )
+    rewrite_method: Optional[str] = Field(
+        default=None,
+        description="Method used for query rewriting: 'llm' or 'fallback_concat'",
+    )
     rewrite_ms: float = Field(
         default=0.0,
         description="Time spent in the query rewriter in milliseconds",
+    )
+
+    # ── Phase 3: degraded retrieval fields (additive, optional) ───────────────
+    retrieval_mode: Optional[str] = Field(
+        default=None,
+        description="'vector' for normal retrieval, 'lexical_fallback' when embedding failed",
+    )
+    degraded: Optional[bool] = Field(
+        default=None,
+        description="True when the answer was produced via lexical fallback (embedding failed)",
     )
 
     model_config = {

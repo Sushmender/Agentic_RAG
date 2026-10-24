@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # ── OpenRouter ───────────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key")
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    EMBEDDING_MODEL: str = "nvidia/nemotron-3-embed-1b:free"
     RERANKER_MODEL: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
     FALLBACK_LLM_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
@@ -91,13 +91,13 @@ class Settings(BaseSettings):
 
     # ── Follow-up Query Rewriting ─────────────────────────────────────────────
     REWRITE_ENABLED: bool = True
-    REWRITE_TIMEOUT_S: float = 4.0
+    REWRITE_TIMEOUT_S: float = 2.5
 
     # ── Query Embedding Resilience & Optimization ────────────────────────────
-    EMBED_QUERY_TIMEOUT_S: float = 6.0
-    EMBED_QUERY_MAX_ATTEMPTS: int = 3
+    EMBED_QUERY_TIMEOUT_S: float = 4.0
+    EMBED_QUERY_MAX_ATTEMPTS: int = 2
     EMBED_QUERY_BACKOFF_S: float = 0.5
-    EMBED_QUERY_HEDGE_AFTER_S: float = 2.5
+    EMBED_QUERY_HEDGE_AFTER_S: float = 1.5
     EMBED_QUERY_HEDGE_ENABLED: bool = True
 
     # ── Allowed MIME types ───────────────────────────────────────────────────

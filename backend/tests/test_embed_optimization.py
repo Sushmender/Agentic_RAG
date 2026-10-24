@@ -189,3 +189,45 @@ async def test_redis_outage_falls_back_to_in_process_cache():
         # Get should not fail; retrieves from in-memory LRU
         cached = await get_cached_embedding(model, query)
         assert cached == vector
+
+
+@pytest.mark.asyncio
+async def test_worst_case_query_embedding_time_bounded_at_12s(monkeypatch):
+    """
+    (f) Proves that with mocked hanging calls, the worst-case total query-embedding
+    time is bounded at about 12 s (default settings: EMBED_QUERY_TIMEOUT_S=4.0,
+    EMBED_QUERY_MAX_ATTEMPTS=2, EMBED_QUERY_HEDGE_AFTER_S=1.5, EMBED_QUERY_BACKOFF_S=0.5).
+    """
+    provider = OpenRouterEmbeddingProvider()
+    settings = get_settings()
+
+    monkeypatch.setattr(settings, "EMBED_QUERY_TIMEOUT_S", 4.0)
+    monkeypatch.setattr(settings, "EMBED_QUERY_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(settings, "EMBED_QUERY_HEDGE_AFTER_S", 1.5)
+    monkeypatch.setattr(settings, "EMBED_QUERY_BACKOFF_S", 0.5)
+    monkeypatch.setattr(settings, "EMBED_QUERY_HEDGE_ENABLED", True)
+
+    call_count = 0
+
+    async def mock_hanging_post(endpoint, payload, timeout=None):
+        nonlocal call_count
+        call_count += 1
+        to = timeout if timeout is not None else 4.0
+        await asyncio.sleep(to)
+        raise httpx.ReadTimeout(f"Mocked timeout after {to}s")
+
+    t0 = time.monotonic()
+    with patch("app.providers.openrouter_embedding.openrouter_client.post", side_effect=mock_hanging_post):
+        with pytest.raises((httpx.ReadTimeout, RuntimeError)):
+            await provider.embed_query("worst-case hanging query")
+    elapsed_s = time.monotonic() - t0
+
+    # Attempt 1: 4s task1 + 1.5s hedge + 4s task2 = 5.5s
+    # Backoff: 0.5s + jitter (~0.1s) = ~0.6s
+    # Attempt 2: 5.5s
+    # Total elapsed is ~11.6s, strictly bounded around 12s.
+    assert elapsed_s >= 11.0
+    assert elapsed_s <= 12.5
+    meta = provider.get_last_query_meta()
+    assert meta["attempts"] == 2
+
