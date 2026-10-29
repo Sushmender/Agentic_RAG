@@ -147,7 +147,7 @@ async def index_chunks(document_id: str) -> EmbeddingResult:
     for batch_start in range(0, len(new_chunks), batch_size):
         batch_chunks = new_chunks[batch_start : batch_start + batch_size]
         batch_embeddings = embeddings[batch_start : batch_start + batch_size]
-        upserted = upsert_chunks(batch_chunks, batch_embeddings)
+        upserted = upsert_chunks(batch_chunks, batch_embeddings, embedding_model=embedding_provider.model)
         indexed += upserted
         log.debug(
             "ChromaDB batch upserted",

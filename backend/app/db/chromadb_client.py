@@ -80,8 +80,11 @@ def init_chromadb(client: Optional[chromadb.ClientAPI] = None) -> None:
 
     _collection = _chroma_client.get_or_create_collection(
         name=settings.CHROMA_COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},  # cosine similarity
+        metadata={"hnsw:space": "cosine", "embedding_model": settings.EMBEDDING_MODEL},
     )
+
+    # Startup guard: ensure collection-level name is recorded when missing
+    ensure_collection_metadata_model()
 
     count = _collection.count()
     logger.info(
@@ -96,14 +99,16 @@ def init_chromadb(client: Optional[chromadb.ClientAPI] = None) -> None:
 def upsert_chunks(
     chunks: List[Chunk],
     embeddings: List[List[float]],
+    embedding_model: Optional[str] = None,
 ) -> int:
     """
     Upsert chunks with their embeddings into ChromaDB.
     Idempotent: existing chunk_ids are safely overwritten with new data.
 
     Args:
-        chunks:     List of normalized Chunk objects.
-        embeddings: Embedding vectors in the same order as chunks.
+        chunks:          List of normalized Chunk objects.
+        embeddings:      Embedding vectors in the same order as chunks.
+        embedding_model: Optional embedding model name; defaults to settings.EMBEDDING_MODEL.
 
     Returns:
         Number of chunks upserted.
@@ -112,10 +117,22 @@ def upsert_chunks(
         return 0
 
     collection = get_collection()
+    model_name = embedding_model or settings.EMBEDDING_MODEL
+
+    # Store/update embedding_model in collection metadata
+    try:
+        current_meta = dict(collection.metadata or {})
+        if current_meta.get("embedding_model") != model_name:
+            # ChromaDB raises if hnsw:space is updated via modify(), so exclude it
+            updated_meta = {k: v for k, v in current_meta.items() if k != "hnsw:space"}
+            updated_meta["embedding_model"] = model_name
+            collection.modify(metadata=updated_meta)
+    except Exception as exc:
+        logger.debug("Failed to update collection metadata with embedding_model", error=str(exc))
 
     ids = [c.chunk_id for c in chunks]
     documents = [c.text for c in chunks]
-    metadatas = [_chunk_to_metadata(c) for c in chunks]
+    metadatas = [_chunk_to_metadata(c, embedding_model=model_name) for c in chunks]
 
     collection.upsert(
         ids=ids,
@@ -128,6 +145,7 @@ def upsert_chunks(
         "ChromaDB upsert complete",
         count=len(chunks),
         collection=settings.CHROMA_COLLECTION_NAME,
+        embedding_model=model_name,
     )
     return len(chunks)
 
@@ -241,6 +259,16 @@ def query_similar(
     if collection.count() == 0:
         return []
 
+    # Guard: warn if stored embedding model differs from current query model
+    stored_model = get_stored_embedding_model()
+    if stored_model and stored_model != settings.EMBEDDING_MODEL:
+        logger.warning(
+            "Embedding model mismatch detected on ChromaDB query! "
+            f"Stored model '{stored_model}' differs from current query model '{settings.EMBEDDING_MODEL}'.",
+            stored_embedding_model=stored_model,
+            current_embedding_model=settings.EMBEDDING_MODEL,
+        )
+
     kwargs: Dict[str, Any] = {
         "query_embeddings": [embedding],
         "n_results": min(n_results, collection.count()),
@@ -304,9 +332,72 @@ def is_healthy() -> bool:
         return False
 
 
+def ensure_collection_metadata_model() -> Optional[str]:
+    """
+    Startup guard: ensure the collection-level metadata records the embedding_model name.
+    If the collection metadata is missing 'embedding_model', resolve it from
+    per-chunk metadata (or settings.EMBEDDING_MODEL fallback) and write it
+    via collection.modify() without touching any existing vectors.
+    """
+    try:
+        collection = get_collection()
+        current_meta = dict(collection.metadata or {})
+        model_name = current_meta.get("embedding_model")
+        if not model_name:
+            resolved_model = get_stored_embedding_model() or settings.EMBEDDING_MODEL
+            updated_meta = {k: v for k, v in current_meta.items() if k != "hnsw:space"}
+            updated_meta["embedding_model"] = resolved_model
+            collection.modify(metadata=updated_meta)
+            logger.info("Startup guard: collection metadata updated with embedding model", embedding_model=resolved_model)
+            return resolved_model
+        return str(model_name)
+    except Exception as exc:
+        logger.warning("Startup guard: failed to ensure collection metadata embedding model", error=str(exc))
+        return None
+
+
+def get_stored_embedding_model() -> Optional[str]:
+    """
+    Return the embedding model name stored in ChromaDB metadata.
+    Checks collection metadata first, then inspects chunk metadata.
+    Returns None if no stored model is found or collection is empty/uninitialized.
+    """
+    try:
+        collection = get_collection()
+        if collection.metadata and collection.metadata.get("embedding_model"):
+            return str(collection.metadata["embedding_model"])
+
+        if collection.count() > 0:
+            sample = collection.get(limit=1, include=["metadatas"])
+            metas = sample.get("metadatas") or []
+            if metas and metas[0] and "embedding_model" in metas[0]:
+                return str(metas[0]["embedding_model"])
+    except Exception as exc:
+        logger.debug("Failed to get stored embedding model", error=str(exc))
+    return None
+
+
+def check_embedding_model_mismatch() -> Optional[bool]:
+    """
+    Check if the stored embedding model differs from settings.EMBEDDING_MODEL.
+    Returns:
+        True: stored model exists and does not match settings.EMBEDDING_MODEL
+        False: stored model exists and matches settings.EMBEDDING_MODEL
+        None: no stored model found (collection empty or unavailable)
+    """
+    try:
+        stored = get_stored_embedding_model()
+        if not stored:
+            return None
+        return stored != settings.EMBEDDING_MODEL
+    except Exception as exc:
+        logger.warning("Failed to check embedding model mismatch", error=str(exc))
+        return None
+
+
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _chunk_to_metadata(chunk: Chunk) -> Dict[str, Any]:
+def _chunk_to_metadata(chunk: Chunk, embedding_model: Optional[str] = None) -> Dict[str, Any]:
     """
     Convert a Chunk object to a ChromaDB-compatible metadata dict.
     All values must be scalar (str, int, float, bool).
@@ -324,5 +415,6 @@ def _chunk_to_metadata(chunk: Chunk) -> Dict[str, Any]:
         "bbox_y1": float(bbox[3]),
         "source": chunk.source or "",
         "parser_version": chunk.parser_version or "",
+        "embedding_model": embedding_model or settings.EMBEDDING_MODEL,
     }
 

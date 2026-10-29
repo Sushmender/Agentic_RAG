@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
+from app.db import chromadb_client
 from app.db.sqlite_store import document_store
 from app.providers.openrouter_embedding import embedding_provider
 from app.providers.openrouter_reranker import reranker_provider
@@ -139,6 +140,18 @@ async def query(
     )
     if request.document_ids:
         log = log.bind(document_ids=request.document_ids)
+
+    # Guard: warn if stored embedding model differs from current query model
+    stored_model = chromadb_client.get_stored_embedding_model()
+    if stored_model and stored_model != settings.EMBEDDING_MODEL:
+        logger.warning(
+            "EMBEDDING MODEL MISMATCH DETECTED ON QUERY: "
+            f"Stored collection embedding model '{stored_model}' differs from "
+            f"current query model '{settings.EMBEDDING_MODEL}'. "
+            "Retrieval quality may be degraded or inconsistent.",
+            stored_embedding_model=stored_model,
+            current_embedding_model=settings.EMBEDDING_MODEL,
+        )
 
     log.info("Query pipeline started")
 
@@ -355,6 +368,34 @@ async def query(
     reranked_candidates: List[RetrievalResult]
     rerank_skipped = False
 
+    # Small documents check: if selected documents hold at most SMALL_DOC_CHUNK_LIMIT
+    # chunks in total, pass reranked top max(top_k, SMALL_DOC_CONTEXT_CHUNKS) chunks to LLM
+    total_selected_chunks = 0
+    if retrieval_doc_ids:
+        for did in retrieval_doc_ids:
+            doc_meta = await document_store.get(did)
+            if doc_meta and doc_meta.chunk_count:
+                total_selected_chunks += doc_meta.chunk_count
+            else:
+                try:
+                    c_res = chromadb_client.get_collection().get(where={"document_id": did}, include=[])
+                    total_selected_chunks += len(c_res.get("ids", []))
+                except Exception:
+                    pass
+
+    effective_top_k = top_k
+    if total_selected_chunks > 0 and total_selected_chunks <= cfg.SMALL_DOC_CHUNK_LIMIT:
+        effective_top_k = max(top_k, cfg.SMALL_DOC_CONTEXT_CHUNKS)
+        log.info(
+            "Small documents detected — expanding context chunks",
+            total_selected_chunks=total_selected_chunks,
+            chunk_limit=cfg.SMALL_DOC_CHUNK_LIMIT,
+            original_top_k=top_k,
+            effective_top_k=effective_top_k,
+        )
+
+    rerank_top_k = max(top_k, effective_top_k)
+
     try:
         # Convert RetrievalResult to dicts for the reranker.
         # Strip HTML from text so the reranker scores actual content.
@@ -371,11 +412,10 @@ async def query(
             for c in candidates
         ]
 
-
         reranked_dicts = await reranker_provider.rerank(
             query=standalone,
             candidates=candidate_dicts,
-            top_k=top_k,
+            top_k=rerank_top_k,
         )
 
         # Convert reranked dicts back to RetrievalResult (with updated scores)
@@ -404,8 +444,8 @@ async def query(
             error=str(exc),
             error_type=type(exc).__name__,
         )
-        # Fall back to raw retrieval, limit to top_k
-        reranked_candidates = candidates[:top_k]
+        # Fall back to raw retrieval, limit to rerank_top_k
+        reranked_candidates = candidates[:rerank_top_k]
         rerank_skipped = True
 
     rerank_ms = round((time.monotonic() - rerank_start) * 1000, 1)
@@ -414,8 +454,10 @@ async def query(
     assembled = assemble_context(
         candidates=reranked_candidates,
         query=standalone,
-        top_k=top_k,
+        top_k=effective_top_k,
         max_tokens=cfg.MAX_CONTEXT_TOKENS,
+        history=history_payload or None,
+        original_query=request.query,
     )
     log.info(
         "Context assembled",
@@ -423,6 +465,28 @@ async def query(
         tokens_est=assembled.total_tokens_est,
         truncated=assembled.chunks_truncated,
     )
+
+    # Phase B: Opt-in debug logging: see what the LLM sees
+    if cfg.LOG_CONTEXT_DEBUG:
+        selected_ids = {c.chunk_id for c in assembled.selected_chunks}
+        debug_chunks = [
+            {
+                "chunk_id": c.chunk_id,
+                "page": c.page,
+                "rerank_score": round(c.similarity_score, 4),
+                "text_preview": c.text[:80],
+                "in_context": c.chunk_id in selected_ids,
+            }
+            for c in reranked_candidates
+        ]
+        logger.info(
+            "Context debug (LOG_CONTEXT_DEBUG)",
+            standalone_query=standalone,
+            reranked_chunks=debug_chunks,
+            chunks_in_context=[c.chunk_id for c in assembled.selected_chunks],
+            total_reranked=len(reranked_candidates),
+            total_in_context=len(assembled.selected_chunks),
+        )
 
     # ── Step 6: Generate answer ───────────────────────────────────────────────
     llm_start = time.monotonic()

@@ -171,9 +171,14 @@ def _build_prompt(query: str, history: List[dict]) -> str:
         "=== END CONVERSATION DATA ===\n\n"
         "Task: Rewrite the LAST USER question below as a single standalone question "
         "that can be understood without the conversation above.\n"
-        "- Resolve all pronouns and ambiguous references using the conversation data.\n"
-        "- If it is already standalone, return it unchanged.\n"
-        "- Output ONLY the rewritten question. Do NOT include conversational meta-commentary (such as 'Here is the rewritten query:').\n\n"
+        "Rules:\n"
+        "- Resolve pronouns and ambiguous references against the whole previous exchange (both questions and answers).\n"
+        "- If the follow-up plausibly refers to several things (such as the comparison itself, both items, or figures), "
+        "write ONE standalone question that covers all of them instead of picking one, and keep the named entities and figures from the previous exchange.\n"
+        "- Narrow only when the follow-up question itself explicitly names a specific item.\n"
+        "- If the question is already standalone, return it unchanged.\n"
+        "- Output ONLY the rewritten question on a single line (at most 40 words, at most 300 characters). "
+        "Do NOT include conversational meta-commentary (such as 'Here is the rewritten query:').\n\n"
         f"LAST USER QUESTION: {query}"
     )
 

@@ -455,3 +455,64 @@ class TestHistoryValidation:
         result = self._validate(history)
         assert result is not None
         assert len(result) == 6
+
+
+# ── Phase C: Rewriter Keeps the Scope Unit Tests ───────────────────────────────
+
+class TestRewriterPromptAndScoping:
+    """Unit tests for Phase C rewriter prompt instructions and broader rewrite acceptance."""
+
+    def test_prompt_contains_whole_exchange_and_scope_instructions(self):
+        """Prompt instructs LLM to resolve against whole exchange and cover all items without narrowing."""
+        from app.services.query_rewriter import _build_prompt
+
+        history = [
+            {"role": "user", "content": "How did Southeast growth compare to Northeast?"},
+            {"role": "assistant", "content": "Southeast grew 31% while Northeast grew 9% due to increased local competition."},
+        ]
+        prompt = _build_prompt("and what drove it?", history)
+
+        # 1. Whole previous exchange (both questions and answers)
+        assert "whole previous exchange" in prompt.lower() or "questions and answers" in prompt.lower()
+        # 2. Covers multiple things / comparison / both items instead of picking one
+        assert "comparison" in prompt.lower() or "both items" in prompt.lower()
+        assert "instead of picking one" in prompt.lower() or "covers all of them" in prompt.lower()
+        # 3. Keeps named entities and figures
+        assert "named entities and figures" in prompt.lower() or "entities" in prompt.lower()
+        # 4. Narrow only when follow-up itself names specific item
+        assert "narrow only" in prompt.lower()
+
+    def test_sanitizer_accepts_broader_rewrite_with_entities_and_figures(self):
+        """Sanitizer accepts longer, broader rewrite covering both items and comparison."""
+        original = "and what drove it?"
+        # Example from prompt:
+        broader_rewrite = "What drove the difference in growth between the Southeast and Northeast regions?"
+        cleaned = _sanitize_output(broader_rewrite, original)
+        assert cleaned == broader_rewrite
+
+        # Broader rewrite with figures:
+        broader_with_figures = "What drove the difference between the 31% Southeast growth and 9% Northeast growth?"
+        cleaned_figures = _sanitize_output(broader_with_figures, original)
+        assert cleaned_figures == broader_with_figures
+
+    @pytest.mark.asyncio
+    async def test_mocked_llm_returns_broader_rewrite(self):
+        """Mocked LLM returns broad rewrite preserving entities and scope without narrowing."""
+        history = [
+            {"role": "user", "content": "How did Southeast growth compare to Northeast?"},
+            {"role": "assistant", "content": "Southeast grew 31% while Northeast grew 9%."},
+        ]
+        mock_output = {
+            "content": "What drove the difference in growth between the Southeast and Northeast regions?",
+            "input_tokens": 120,
+            "output_tokens": 16,
+            "total_tokens": 136,
+            "cost_usd": 0.0001,
+        }
+        with patch("app.services.query_rewriter.groq_provider.generate", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = mock_output
+            res = await rewrite_query("and what drove it?", history)
+
+            assert res.applied is True
+            assert res.standalone_query == "What drove the difference in growth between the Southeast and Northeast regions?"
+            assert res.rewrite_method == "llm"

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    LOG_CONTEXT_DEBUG: bool = False
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
@@ -76,6 +77,8 @@ class Settings(BaseSettings):
     RERANK_TOP_K: int = 5
     MAX_CONTEXT_TOKENS: int = 8000
     EMBEDDING_BATCH_SIZE: int = 16
+    SMALL_DOC_CHUNK_LIMIT: int = 40
+    SMALL_DOC_CONTEXT_CHUNKS: int = 8
 
     # ── Upload limits ─────────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 50

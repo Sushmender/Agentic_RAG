@@ -46,6 +46,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize ChromaDB
     chromadb_client.init_chromadb()
+    # Startup guard: write collection-level name when missing (without touching existing vectors)
+    chromadb_client.ensure_collection_metadata_model()
+    stored_model = chromadb_client.get_stored_embedding_model()
+    if stored_model and stored_model != settings.EMBEDDING_MODEL:
+        logger.warning(
+            "EMBEDDING MODEL MISMATCH DETECTED AT STARTUP: "
+            f"Stored collection embedding model '{stored_model}' differs from "
+            f"current configured embedding model '{settings.EMBEDDING_MODEL}'. "
+            "Retrieval quality may be degraded or inconsistent.",
+            stored_embedding_model=stored_model,
+            current_embedding_model=settings.EMBEDDING_MODEL,
+        )
 
     # Initialize SQLite persistent store (Day 7)
     await init_sqlite()
