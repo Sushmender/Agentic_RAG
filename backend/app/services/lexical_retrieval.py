@@ -16,9 +16,8 @@ Public API:
 from __future__ import annotations
 
 import math
-import re
 import string
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.core.logging import get_logger
 from app.db.chromadb_client import get_collection

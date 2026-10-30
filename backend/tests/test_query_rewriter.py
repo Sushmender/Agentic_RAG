@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.query_rewriter import (
-    RewriteResult,
     _is_follow_up,
     _sanitize_output,
     rewrite_query,

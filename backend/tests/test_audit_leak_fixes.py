@@ -22,7 +22,6 @@ from app.main import app
 from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
 from app.schemas.job import Job, JobStatus
 from app.schemas.telemetry import (
-    ADECredits,
     EmbeddingCost,
     LatencyDetail,
     LLMCost,

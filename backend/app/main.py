@@ -38,8 +38,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     logger.info("Starting Multimodal RAG API", version=settings.APP_VERSION)
 
-    # ── Startup ──────────────────────────────────────────────────────────────
-    # Ensure data directories exist
     settings.get_upload_dir()
     settings.get_ade_output_dir()
     settings.get_chroma_db_path()
@@ -75,7 +73,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("All services initialized. Ready to serve.")
     yield
 
-    # ── Shutdown ─────────────────────────────────────────────────────────────
     logger.info("Shutting down Multimodal RAG API")
     await redis_client.close_redis()
 

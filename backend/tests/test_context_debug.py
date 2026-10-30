@@ -4,8 +4,6 @@ Unit tests for Phase B LOG_CONTEXT_DEBUG switch.
 """
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
 
 from app.core.config import get_settings
 from app.schemas.query import RetrievalResult

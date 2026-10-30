@@ -5,9 +5,11 @@ install:
 
 HOST ?= 127.0.0.1
 PORT ?= 8000
+export HOST
+export PORT
 
 dev:
-	.venv\Scripts\uvicorn.exe app.main:app --reload --host $(HOST) --port $(PORT)
+	.venv\Scripts\python run.py
 
 test:
 	.venv\Scripts\pytest tests/ -v

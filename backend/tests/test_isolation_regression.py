@@ -4,7 +4,6 @@ Regression tests ensuring test executions do not pollute real persistent data.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import pytest
 from app.schemas.telemetry import TelemetryRecord

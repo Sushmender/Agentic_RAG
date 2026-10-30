@@ -10,8 +10,6 @@ All tests use mocked inputs/providers; NO real requests are sent.
 """
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core.config import get_settings
 from app.schemas.query import RetrievalResult

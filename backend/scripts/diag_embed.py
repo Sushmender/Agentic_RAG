@@ -143,7 +143,7 @@ def print_config() -> None:
     print("=" * 70)
     print("PHASE 1 -- EMBEDDING DIAGNOSTIC")
     print("=" * 70)
-    print(f"\n[CONFIG]")
+    print("\n[CONFIG]")
     print(f"  Embedding base URL        : {EMBED_BASE_URL}")
     print(f"  Embedding model           : {EMBED_MODEL}")
     print(f"  Reranker model            : {RERANK_MODEL}")
@@ -165,7 +165,7 @@ def print_config() -> None:
     if found_proxy:
         print(f"\n  Proxy env vars set : {found_proxy}  (values hidden)")
     else:
-        print(f"\n  Proxy env vars     : none set")
+        print("\n  Proxy env vars     : none set")
 
     key_set = bool(cfg.OPENROUTER_API_KEY and cfg.OPENROUTER_API_KEY != "")
     print(f"\n  OPENROUTER_API_KEY : {'SET (not shown)' if key_set else 'NOT SET!'}")
@@ -364,7 +364,7 @@ async def test_e() -> None:
                 vec, ms, status, _, _ = await _raw_embed(client, TEST_QUERY, EMBED_TIMEOUT)
                 print(f"  E{call_n} [{label}]: {'ok' if vec else 'FAIL'} | {_fmt_ms(ms)} | status={status}")
                 if call_n < 3:
-                    print(f"  ... sleeping 15 s ...")
+                    print("  ... sleeping 15 s ...")
                     await asyncio.sleep(15)
     except Exception as exc:
         print(f"  E [{label}] setup error: {exc}")

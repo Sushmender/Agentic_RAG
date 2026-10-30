@@ -5,9 +5,8 @@ User model schema for auth and document ownership.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
 
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 
 
 class User(BaseModel):

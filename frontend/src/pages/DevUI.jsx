@@ -41,7 +41,6 @@ export default function DevUI() {
         Design system playground — all tokens, components, and states.
       </p>
 
-      {/* ── Fonts ── */}
       <Section title="Typography">
         <div style={{ width: '100%' }}>
           <p style={{ fontFamily: 'var(--font-heading)', fontSize: '28px', color: 'var(--text-primary)' }}>Space Grotesk — Heading</p>
@@ -51,7 +50,6 @@ export default function DevUI() {
         </div>
       </Section>
 
-      {/* ── Colors ── */}
       <Section title="Color Tokens">
         {[
           { name: '--bg-base', val: '#0B0F1A' },
@@ -73,7 +71,6 @@ export default function DevUI() {
         ))}
       </Section>
 
-      {/* ── Buttons ── */}
       <Section title="Buttons">
         <Button variant="primary">Primary</Button>
         <Button variant="secondary">Secondary</Button>
@@ -88,7 +85,6 @@ export default function DevUI() {
         <Button variant="danger" iconOnly icon={<Trash2 size={14} />} aria-label="Delete">Delete</Button>
       </Section>
 
-      {/* ── Inputs ── */}
       <Section title="Inputs">
         <div style={{ width: '260px' }}>
           <Input label="Username" placeholder="your_username" />
@@ -110,7 +106,6 @@ export default function DevUI() {
         </div>
       </Section>
 
-      {/* ── Badges ── */}
       <Section title="Badges">
         <Badge variant="success">Success</Badge>
         <Badge variant="warn">Warning</Badge>
@@ -125,7 +120,6 @@ export default function DevUI() {
         <StatusBadge status="failed" />
       </Section>
 
-      {/* ── Tabs ── */}
       <Section title="Tabs">
         <Tabs
           tabs={[
@@ -139,7 +133,6 @@ export default function DevUI() {
         />
       </Section>
 
-      {/* ── Card ── */}
       <Section title="Card / Panel">
         <Card style={{ width: '280px' }}>
           <CardHeader>
@@ -161,7 +154,6 @@ export default function DevUI() {
         </Card>
       </Section>
 
-      {/* ── Tooltip ── */}
       <Section title="Tooltip">
         <Tooltip content="Documents page" placement="top">
           <Button variant="secondary" icon={<FileText size={14} />}>Hover me (top)</Button>
@@ -171,7 +163,6 @@ export default function DevUI() {
         </Tooltip>
       </Section>
 
-      {/* ── Skeleton ── */}
       <Section title="Skeleton">
         <div style={{ width: '300px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <Skeleton width="100%" height="60px" />
@@ -181,7 +172,6 @@ export default function DevUI() {
         </div>
       </Section>
 
-      {/* ── EmptyState ── */}
       <Section title="Empty State">
         <div style={{ width: '400px', border: '1px solid var(--border)', borderRadius: '10px', background: 'var(--bg-panel)' }}>
           <EmptyState
@@ -193,7 +183,6 @@ export default function DevUI() {
         </div>
       </Section>
 
-      {/* ── Kbd ── */}
       <Section title="Keyboard Hints">
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--text-secondary)' }}>
           Submit with <Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd>
@@ -203,7 +192,6 @@ export default function DevUI() {
         </div>
       </Section>
 
-      {/* ── Modal ── */}
       <Section title="Modal / Dialog">
         <Button variant="secondary" onClick={() => setModalOpen(true)}>Open Modal</Button>
         <Modal

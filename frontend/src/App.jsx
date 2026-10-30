@@ -18,14 +18,14 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 // Route-level code splitting
 const DocumentsPage  = lazy(() => import('./pages/DocumentsPage'));
 const QueryPage      = lazy(() => import('./pages/QueryPage'));
-const LoginPage      = lazy(() => import('./pages/LoginPage'));
-const RegisterPage   = lazy(() => import('./pages/RegisterPage'));
+const LoginPage      = lazy(() => import('./pages/auth/LoginPage'));
+const RegisterPage   = lazy(() => import('./pages/auth/RegisterPage'));
 const MetricsPage    = lazy(() => import('./pages/MetricsPage'));
 const EvaluationPage = lazy(() => import('./pages/EvaluationPage'));
 const NotFoundPage   = lazy(() => import('./pages/NotFoundPage'));
 
 // Dev UI playground (dev only)
-const DevUI = lazy(() => import('./pages/DevUI'));
+const DevUIPage = import.meta.env.DEV ? lazy(() => import('./pages/DevUI')) : null;
 
 // Skeleton fallback for route Suspense
 function PageSkeleton() {
@@ -61,9 +61,10 @@ function AppRoutes() {
         />
 
         {/* Dev route */}
-        {import.meta.env.DEV && (
-          <Route path="/dev/ui" element={<DevUI />} />
-        )}
+        <Route
+          path="/dev/ui"
+          element={DevUIPage ? <DevUIPage /> : <Navigate to="/" replace />}
+        />
 
         {/* Protected routes inside AppShell */}
         <Route

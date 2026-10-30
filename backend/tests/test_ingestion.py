@@ -15,11 +15,9 @@ Day 1 ingestion tests:
 from __future__ import annotations
 
 import io
-import time
 import uuid
 import zipfile
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -303,8 +301,8 @@ class TestGetJob:
         )
         assert resp.status_code == 404, resp.text
 
-    def test_get_job_403_for_wrong_user(self):
-        """User B cannot access User A's job."""
+    def test_get_job_404_for_wrong_user(self):
+        """User B cannot access User A's job (returns 404 to avoid revealing existence)."""
         token_a = _register_and_login()
         token_b = _register_and_login()
 
@@ -316,7 +314,7 @@ class TestGetJob:
             f"/api/v1/jobs/{job_id}",
             headers=_auth_headers(token_b),
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
 
     def test_job_reaches_completed_or_processing(self):
         """

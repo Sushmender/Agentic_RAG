@@ -20,7 +20,6 @@ from app.main import app
 from app.schemas.query import RetrievalResult
 from app.services.embed_circuit_breaker import (
     BreakerState,
-    EmbedCircuitOpenError,
     EmbeddingCircuitBreaker,
     embed_circuit_breaker,
 )

@@ -8,13 +8,10 @@ Covers: text/table/figure normalization, empty filtering,
 """
 from __future__ import annotations
 
-import json
-import hashlib
-from pathlib import Path
 
 import pytest
 
-from app.services.chunking_service import normalize_chunks, parse_ade_metadata, _stable_chunk_id
+from app.services.chunking_service import normalize_chunks, parse_ade_metadata
 from app.schemas.chunk import ChunkType
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import sys
 from contextvars import ContextVar
-from typing import Any, MutableMapping
+from typing import Any
 from uuid import uuid4
 
 import structlog
@@ -97,7 +97,9 @@ def _quote_string_values(
     so that log lines remain grep/awk-parseable.
     Keys affected: any value of type str containing spaces, ?, =, or :.
     """
-    needs_quoting = lambda v: isinstance(v, str) and any(c in v for c in " ?=:,")
+    def needs_quoting(v: Any) -> bool:
+        return isinstance(v, str) and any(c in v for c in " ?=:,")
+
     return {
         k: (f'"{v}"' if needs_quoting(v) else v)
         for k, v in event_dict.items()

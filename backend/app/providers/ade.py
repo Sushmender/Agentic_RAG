@@ -29,13 +29,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-    before_sleep_log,
-)
 import logging
 
 from app.core.config import get_settings

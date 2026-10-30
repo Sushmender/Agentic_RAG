@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import math
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # Ensure backend root is on Python path
 CURRENT_DIR = Path(__file__).resolve().parent

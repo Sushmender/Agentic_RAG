@@ -19,7 +19,6 @@ import pytest
 from app.core.config import get_settings
 from app.providers.openrouter_embedding import OpenRouterEmbeddingProvider
 from app.services.embedding_cache import (
-    compute_cache_key,
     get_cached_embedding,
     in_memory_lru,
     set_cached_embedding,

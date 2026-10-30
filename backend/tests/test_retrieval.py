@@ -19,10 +19,9 @@ Tests:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict, List
+from unittest.mock import patch
 
-import pytest
 
 from app.schemas.query import RouteType
 from app.services.query_router import route_query

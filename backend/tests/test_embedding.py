@@ -20,11 +20,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import chromadb
 import pytest
-import pytest_asyncio
 
 from app.db.chromadb_client import (
     get_chunk_by_id,
-    get_existing_ids,
     init_chromadb,
     upsert_chunks,
 )
@@ -49,7 +47,6 @@ def ephemeral_chroma(monkeypatch):
 
     # Use a unique collection name so no test pollutes another
     unique_name = f"test_collection_{uuid.uuid4().hex[:8]}"
-    original_name = chroma_module.settings.CHROMA_COLLECTION_NAME
     monkeypatch.setattr(chroma_module.settings, "CHROMA_COLLECTION_NAME", unique_name)
 
     client = chromadb.EphemeralClient()
@@ -215,7 +212,6 @@ async def test_embedding_service_new_chunks(ephemeral_chroma, set_test_env):
     - Return new_chunks_indexed == total chunk count
     - ChromaDB count == total chunk count
     """
-    import app.db.chromadb_client as chroma_module
     from app.db.chromadb_client import get_collection
     from app.services import embedding_service
 

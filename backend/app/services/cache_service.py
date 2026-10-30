@@ -19,7 +19,6 @@ they return None / skip silently and log the error.
 from __future__ import annotations
 
 import hashlib
-import json
 from typing import Optional
 
 from app.core.config import get_settings

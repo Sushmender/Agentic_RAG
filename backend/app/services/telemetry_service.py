@@ -10,8 +10,8 @@ Public API:
 """
 from __future__ import annotations
 
-import json
 import math
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -20,9 +20,7 @@ import aiofiles
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.schemas.telemetry import (
-    EmbeddingCost,
     IngestionStats,
-    LLMCost,
     MetricsResponse,
     RecentQueryItem,
     StageLatency,
@@ -31,10 +29,6 @@ from app.schemas.telemetry import (
 
 logger = get_logger(__name__)
 settings = get_settings()
-
-import os
-
-# ── Telemetry file path ────────────────────────────────────────────────────────
 
 def _telemetry_path() -> Path:
     """Return path to data/telemetry.jsonl, creating parent dirs as needed."""

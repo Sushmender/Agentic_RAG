@@ -81,6 +81,24 @@ def _seed_chunk(chunk_id: str, doc_id: str, text: str, embedding: list[float]):
     chromadb_client.upsert_chunks([chunk], [embedding])
 
 
+@pytest.fixture(autouse=True)
+def isolate_chroma_collection():
+    """Recreate isolated Chroma collection per test so no test depends on order."""
+    client = chromadb_client.get_chroma_client()
+    try:
+        client.delete_collection(chromadb_client.settings.CHROMA_COLLECTION_NAME)
+    except Exception:
+        pass
+    chromadb_client._collection = None
+    chromadb_client.init_chromadb(client=client)
+    yield
+    try:
+        client.delete_collection(chromadb_client.settings.CHROMA_COLLECTION_NAME)
+    except Exception:
+        pass
+    chromadb_client._collection = None
+
+
 # ── Test 1: Cross-user chunk isolation ────────────────────────────────────────
 
 def test_user_a_unfiltered_query_never_returns_user_b_chunks():
@@ -99,8 +117,9 @@ def test_user_a_unfiltered_query_never_returns_user_b_chunks():
     _seed_document(doc_b, user_b, "beta.pdf")
 
     # Index chunks in ChromaDB: user B's chunk matches the embedding perfectly
-    vec_match = [1.0] + [0.0] * 63
-    vec_partial = [0.8] + [0.1] * 63
+    dim = 2048
+    vec_match = [1.0] + [0.0] * (dim - 1)
+    vec_partial = [0.8] + [0.1] * (dim - 1)
 
     _seed_chunk("chunk_a1", doc_a, "User A sensitive earnings details", vec_partial)
     _seed_chunk("chunk_b1", doc_b, "User B top secret financial data", vec_match)

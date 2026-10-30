@@ -17,7 +17,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   RefreshCw, Clock, Zap, Database, TrendingUp,
   DollarSign, Hash, BarChart3, X, ChevronUp,
-  ChevronDown, Search, MessageSquare
+  ChevronDown, Search, MessageSquare, Lightbulb
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
@@ -629,7 +629,7 @@ export default function MetricsPage() {
                 </div>
               </div>
               {stageInsight && (
-                <span className="metrics-insight">💡 {stageInsight}</span>
+                <span className="metrics-insight"><Lightbulb size={12} style={{ display: 'inline-block', verticalAlign: '-1.5px', marginRight: '4px' }} />{stageInsight}</span>
               )}
             </div>
             <div className="metrics-latency-panel">

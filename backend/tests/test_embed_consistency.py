@@ -201,7 +201,6 @@ def test_verdict_thresholds():
 
 def test_ensure_collection_metadata_model_writes_missing():
     """Startup guard writes collection-level model name when missing without touching vectors."""
-    settings = get_settings()
     chunk = _make_sample_chunk("c1", "doc1")
     chromadb_client.upsert_chunks([chunk], [[1.0, 0.0]], embedding_model="custom/test-model:v1")
 

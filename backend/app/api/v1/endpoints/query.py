@@ -188,7 +188,6 @@ async def query(
 
 
     if cached is not None:
-        serve_start = time.monotonic()
         log.info("Serving from cache", cache_check_ms=cache_check_ms)
         cached.latency.cache_check_ms = cache_check_ms
         # Phase 3: stamp actual serve time so the UI shows real latency not original

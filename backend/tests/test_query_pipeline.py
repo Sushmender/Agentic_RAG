@@ -199,7 +199,8 @@ class TestFullPipeline:
 
     def _query(self, payload=None):
         patchers = make_all_patches()
-        mocks = [p.start() for p in patchers]
+        for p in patchers:
+            p.start()
         try:
             with TestClient(app) as client:
                 resp = client.post(

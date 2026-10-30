@@ -15,13 +15,8 @@ Coverage:
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 
 from app.schemas.telemetry import (
     ADECredits,
@@ -191,10 +186,12 @@ class TestTelemetryService:
     async def test_append_error_does_not_raise(self, monkeypatch):
         """Telemetry failure must never propagate (fire-and-forget)."""
         # Make the file open fail
-        async def _bad_open(*args, **kwargs):
-            raise OSError("disk full")
+        from unittest.mock import MagicMock
 
-        monkeypatch.setattr("aiofiles.open", _bad_open)
+        monkeypatch.setattr(
+            "aiofiles.open",
+            MagicMock(side_effect=OSError("disk full")),
+        )
         # Should NOT raise
         await telemetry_service.append_record(_make_query_record())
 

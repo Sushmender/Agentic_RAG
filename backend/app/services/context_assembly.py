@@ -17,7 +17,7 @@ Token budget note:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from app.core.config import get_settings
@@ -26,7 +26,6 @@ from app.schemas.query import RetrievalResult
 
 logger = get_logger(__name__)
 
-# ── HTML cleaning ──────────────────────────────────────────────────────────────
 _TAG_RE    = re.compile(r'<[^>]+>')
 _MULTI_WS  = re.compile(r'[ \t]{2,}')
 _MULTI_NL  = re.compile(r'\n{3,}')
@@ -54,12 +53,10 @@ def _html_table_to_markdown(table_html: str) -> str:
         | Marketing   | 220 | 195 | -25 |
     """
     rows = [_cells_from_row(r) for r in _ROW_RE.findall(table_html)]
-    # Drop empty rows
     rows = [r for r in rows if any(c for c in r)]
     if not rows:
         return ""
 
-    # Pad all rows to the same column count
     max_cols = max(len(r) for r in rows)
     rows = [r + [""] * (max_cols - len(r)) for r in rows]
 
@@ -86,26 +83,21 @@ def _clean_text(raw: str) -> str:
     This function is called at read-time only (context assembly,
     source preview, reranker input).
     """
-    # 1. Convert any HTML table blocks to markdown first
     def replace_table(m: re.Match) -> str:
         return "\n" + _html_table_to_markdown(m.group(0)) + "\n"
 
     text = _TABLE_RE.sub(replace_table, raw)
 
-    # 2. Unwrap ADE chart wrappers (<:: and ::> / : chart::>) so chart content is preserved
+    # Unwrap ADE chart wrappers (<:: and ::> / : chart::>) so chart content is preserved
     text = re.sub(r'<::', '', text)
     text = re.sub(r':?\s*[a-zA-Z ]*::>', '', text)
 
-    # 3. Strip remaining HTML tags (anchors, inline tags, etc.)
     text = _TAG_RE.sub(' ', text)
-
-    # 4. Normalise whitespace
     text = _MULTI_WS.sub(' ', text)
     text = _MULTI_NL.sub('\n\n', text)
     return text.strip()
 
 
-# ── System prompt template ─────────────────────────────────────────────────────
 _SYSTEM_PROMPT = (
     "You are a precise document assistant. "
     "Answer ONLY using the provided evidence below. Previous answers are NOT evidence. "
@@ -166,7 +158,6 @@ def assemble_context(
         query_preview=query[:80],
     )
 
-    # ── Step 1: Deduplicate by chunk_id ──────────────────────────────────────
     seen_ids: set[str] = set()
     unique: List[RetrievalResult] = []
     for chunk in candidates:
@@ -180,14 +171,13 @@ def assemble_context(
             removed=len(candidates) - len(unique),
         )
 
-    # ── Step 2: Token-budget enforcement ──────────────────────────────────────
     # Reserve ~500 tokens for question + answer preamble
     available_tokens = max_tokens - 500
     selected: List[RetrievalResult] = []
     tokens_used = 0
     truncated = False
 
-    for chunk in unique[:top_k]:  # Already sorted best-first
+    for chunk in unique[:top_k]:
         clean = _clean_text(chunk.text)
         chunk_tokens = max(1, len(clean) // 4)
         if tokens_used + chunk_tokens > available_tokens:
@@ -207,7 +197,6 @@ def assemble_context(
         top_chunk = unique[0]
         max_chars = available_tokens * 4
         truncated_text = top_chunk.text[:max_chars]
-        # Create a shallow copy with truncated text
         selected = [
             RetrievalResult(
                 chunk_id=top_chunk.chunk_id,
@@ -229,7 +218,6 @@ def assemble_context(
         truncated=truncated,
     )
 
-    # ── Step 3: Build evidence block ──────────────────────────────────────────
     evidence_parts: List[str] = [_EVIDENCE_HEADER]
 
     for i, chunk in enumerate(selected, start=1):
@@ -245,9 +233,7 @@ def assemble_context(
 
     evidence_block = "\n".join(evidence_parts)
 
-    # ── Step 4: Compose full prompt ───────────────────────────────────────────
     if history:
-        # Extract last exchange (most recent user turn and most recent assistant turn)
         last_user_turn = None
         last_assistant_turn = None
         for turn in reversed(history):
@@ -292,7 +278,6 @@ def assemble_context(
             + _ANSWER_LABEL
         )
 
-    # Add question tokens to estimate
     total_tokens_est = tokens_used + len(full_prompt) // 4
 
     return AssembledContext(

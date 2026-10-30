@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import Optional
 
 from app.core.logging import get_logger
 

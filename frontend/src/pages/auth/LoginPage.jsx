@@ -1,5 +1,5 @@
 /**
- * src/pages/LoginPage.jsx
+ * src/pages/auth/LoginPage.jsx
  * Redesigned login — split layout:
  *   Left: brand panel with animated pipeline SVG
  *   Right: clean login form with show/hide password, inline validation
@@ -7,11 +7,11 @@
 
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { PasswordInput, Input } from '../components/ui/Input';
-import { Button } from '../components/ui/Button';
-import { PipelineVisual } from './auth/PipelineVisual';
-import './auth/AuthPage.css';
+import { useAuth } from '../../context/AuthContext';
+import { PasswordInput, Input } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { PipelineVisual } from './PipelineVisual';
+import './AuthPage.css';
 
 export default function LoginPage() {
   const { login } = useAuth();

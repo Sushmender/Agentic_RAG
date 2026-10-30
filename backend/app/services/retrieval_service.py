@@ -37,7 +37,6 @@ This is OR-combined with any chunk_type filter using {"$and": [...]}.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.core.logging import get_logger

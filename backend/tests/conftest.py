@@ -18,7 +18,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -226,7 +226,7 @@ def set_test_env():
     across the entire test session.
     """
     from app.core.config import get_settings
-    from app.db import chromadb_client, redis_client, sqlite_store
+    from app.db import redis_client, sqlite_store
     from app.services import telemetry_service
 
     get_settings.cache_clear()
@@ -268,7 +268,7 @@ def patch_and_reset_stores(set_test_env, monkeypatch):
       5. Clears tables in the isolated test SQLite database.
     """
     from app.core.config import get_settings
-    from app.db import chromadb_client, redis_client, sqlite_store
+    from app.db import redis_client, sqlite_store
     from app.db.in_memory_store import document_store, job_store
     from app.services import embedding_cache, telemetry_service
     from app.api.v1.endpoints import documents as doc_module
@@ -315,6 +315,148 @@ def patch_and_reset_stores(set_test_env, monkeypatch):
     job_store._doc_index.clear()
     embedding_cache.in_memory_lru.clear()
     set_test_env["fake_redis"].clear()
+
+
+# ── Function-scoped Autouse Fixture: Fake & Guard External Providers ─────────
+
+@pytest.fixture(autouse=True)
+def guard_and_fake_external_providers(request, monkeypatch):
+    """
+    Autouse fixture that:
+      1. Bypasses faking and guards when RUN_LIVE_TESTS=1 or the test is marked 'live'.
+      2. Fakes provider entry points (ADE, OpenRouter embeddings, OpenRouter reranker,
+         Groq LLM, OpenRouter LLM) with realistic return shapes so unit tests do
+         not hit live endpoints.
+      3. Blocks lower-level network execution methods (ADE _do_parse, OpenRouter post,
+         Groq _call_with_retry, Upstash Redis from_url) with clear RuntimeError failures
+         if an unmocked network call is ever attempted.
+    """
+    if os.getenv("RUN_LIVE_TESTS") == "1" or request.node.get_closest_marker("live"):
+        yield
+        return
+
+    from app.providers.ade import ADEProvider, ade_provider
+    from app.providers.groq import GroqProvider, groq_provider
+    from app.providers.openrouter import OpenRouterClient, openrouter_client
+    from app.providers.openrouter_embedding import embedding_provider
+    from app.providers.openrouter_llm import openrouter_llm_provider
+    from app.providers.openrouter_reranker import reranker_provider
+    import redis.asyncio as aioredis
+
+    # --- Realistic Fakes for Entry Points ---
+
+    async def _fake_ade_parse(self_or_file, file_path=None, document_id=None, tier=None, **kwargs):
+        if isinstance(self_or_file, str):
+            doc_id = file_path or "fake_doc"
+        else:
+            doc_id = document_id or "fake_doc"
+
+        return {
+            "chunks": [
+                {
+                    "id": f"chunk-{doc_id[:8]}-001",
+                    "type": "text",
+                    "markdown": f"<a id='chunk-{doc_id[:8]}-001'></a>\n\nSample parsed text content from document.",
+                    "grounding": {
+                        "box": {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 0.5},
+                        "page": 0,
+                    },
+                }
+            ],
+            "markdown": "Sample parsed text content from document.",
+            "metadata": {
+                "credit_usage": 1.0,
+                "version": "dpt-2-latest",
+                "page_count": 1,
+                "duration_ms": 100,
+                "job_id": f"job-{doc_id[:8]}",
+                "failed_pages": [],
+            },
+            "grounding": {
+                f"chunk-{doc_id[:8]}-001": {
+                    "box": {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 0.5},
+                    "page": 0,
+                    "type": "chunkText",
+                    "confidence": 0.99,
+                }
+            },
+            "splits": [],
+        }
+
+    async def _fake_embed_passages(texts, *args, **kwargs):
+        dim = 2048
+        return [[0.1] * dim for _ in texts]
+
+    async def _fake_embed_query(query, *args, **kwargs):
+        dim = 2048
+        return [0.1] * dim
+
+    async def _fake_rerank(query, candidates, top_k=5, *args, **kwargs):
+        results = []
+        for i, c in enumerate(candidates[:top_k]):
+            item = dict(c)
+            item["relevance_score"] = round(1.0 - (i * 0.05), 4)
+            results.append(item)
+        return results
+
+    async def _fake_groq_generate(prompt, system_prompt=None, max_tokens=1024, temperature=0.0, *args, **kwargs):
+        return {
+            "content": "Generated test answer based on [Source 1].",
+            "model": "qwen/qwen3.8-27b",
+            "provider": "groq",
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "total_tokens": 70,
+            "cost_usd": 0.00005,
+            "latency_ms": 50.0,
+        }
+
+    async def _fake_openrouter_llm_generate(prompt, system_prompt=None, max_tokens=1024, temperature=0.0, *args, **kwargs):
+        return {
+            "content": "Generated fallback test answer based on [Source 1].",
+            "model": "nvidia/nemotron-3-super-120b-a12b:free",
+            "provider": "openrouter",
+            "input_tokens": 50,
+            "output_tokens": 20,
+            "total_tokens": 70,
+            "cost_usd": 0.0,
+            "latency_ms": 80.0,
+        }
+
+    # Patch entry points on provider instances
+    monkeypatch.setattr(ade_provider, "parse_document", _fake_ade_parse)
+    monkeypatch.setattr(ADEProvider, "parse_document", _fake_ade_parse)
+
+    monkeypatch.setattr(embedding_provider, "embed_passages", _fake_embed_passages)
+    monkeypatch.setattr(embedding_provider, "embed_query", _fake_embed_query)
+
+    monkeypatch.setattr(reranker_provider, "rerank", _fake_rerank)
+    monkeypatch.setattr(groq_provider, "generate", _fake_groq_generate)
+    monkeypatch.setattr(openrouter_llm_provider, "generate", _fake_openrouter_llm_generate)
+
+    # --- Loud Failure Blockers for Real Network Calls ---
+
+    async def _blocked_ade_do_parse(*args, **kwargs):
+        raise RuntimeError("Real network call to LandingAI ADE attempted without RUN_LIVE_TESTS=1")
+
+    async def _blocked_openrouter_post(*args, **kwargs):
+        raise RuntimeError("Real network call to OpenRouter attempted without RUN_LIVE_TESTS=1")
+
+    async def _blocked_groq_retry(*args, **kwargs):
+        raise RuntimeError("Real network call to Groq attempted without RUN_LIVE_TESTS=1")
+
+    def _blocked_redis_from_url(url, *args, **kwargs):
+        if "upstash.io" in str(url).lower():
+            raise RuntimeError("Real network call to Upstash Redis attempted without RUN_LIVE_TESTS=1")
+        return _global_fake_redis
+
+    monkeypatch.setattr(ADEProvider, "_do_parse", _blocked_ade_do_parse)
+    monkeypatch.setattr(OpenRouterClient, "post", _blocked_openrouter_post)
+    monkeypatch.setattr(openrouter_client, "post", _blocked_openrouter_post)
+    monkeypatch.setattr(GroqProvider, "_call_with_retry", _blocked_groq_retry)
+    monkeypatch.setattr(aioredis.Redis, "from_url", _blocked_redis_from_url)
+
+    yield
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: List[pytest.Item]) -> None:

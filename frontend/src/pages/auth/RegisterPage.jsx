@@ -1,16 +1,16 @@
 /**
- * src/pages/RegisterPage.jsx
+ * src/pages/auth/RegisterPage.jsx
  * Redesigned register — same split layout as Login.
  */
 
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { Input, PasswordInput } from '../components/ui/Input';
-import { Button } from '../components/ui/Button';
-import { PipelineVisual } from './auth/PipelineVisual';
+import { useAuth } from '../../context/AuthContext';
+import { Input, PasswordInput } from '../../components/ui/Input';
+import { Button } from '../../components/ui/Button';
+import { PipelineVisual } from './PipelineVisual';
 import { toast } from 'sonner';
-import './auth/AuthPage.css';
+import './AuthPage.css';
 
 export default function RegisterPage() {
   const { register } = useAuth();

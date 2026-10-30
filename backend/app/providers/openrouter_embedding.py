@@ -27,7 +27,7 @@ import asyncio
 import random
 import time
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
