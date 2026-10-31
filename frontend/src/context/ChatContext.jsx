@@ -555,7 +555,7 @@ export function ChatProvider({ children }) {
           type: 'ADD_MESSAGE',
           payload: {
             tabId,
-            message: { id: userMsgId, type: 'user', content: q },
+            message: { id: userMsgId, type: 'user', content: q, docIds: docIds.slice() },
           },
         });
         dispatch({
@@ -583,8 +583,10 @@ export function ChatProvider({ children }) {
       const controller = new AbortController();
       abortControllersRef.current.set(assistantMsgId, controller);
 
-      // Build conversation history: last 3 completed Q/A pairs before this message.
-      // Skip pending and error messages. Strip citation markers [N] and markdown from answers.
+      // Build conversation history: last 3 completed Q/A pairs before this message
+      // that used the SAME document filter and had no errors.
+      // If the document filter just changed, send no history.
+      // Strip citation markers [N] and markdown from answers.
       const stripCitations = (text) => (text || '').replace(/\[\d+\]/g, '').trim();
       const stripMarkdown = (text) =>
         (text || '')
@@ -596,6 +598,9 @@ export function ChatProvider({ children }) {
           .replace(/\n/g, ' ')
           .trim();
 
+      // Serialise the current doc filter for comparison with prior messages
+      const currentDocFilter = JSON.stringify((docIds || []).slice().sort());
+
       const completedMsgs = (currentTab.messages || []).filter(
         (m) => !m.pending && !m.error
       );
@@ -604,7 +609,13 @@ export function ChatProvider({ children }) {
         const m = completedMsgs[i];
         const nx = completedMsgs[i + 1];
         if (m.type === 'user' && nx.type === 'assistant') {
-          historyPairs.push({ u: m.content, a: stripMarkdown(stripCitations(nx.content)) });
+          // Only include pairs that used the same document filter
+          const pairDocFilter = JSON.stringify(
+            (m.docIds || docIds || []).slice().sort()
+          );
+          if (pairDocFilter === currentDocFilter) {
+            historyPairs.push({ u: m.content, a: stripMarkdown(stripCitations(nx.content)) });
+          }
           i++;
         }
       }

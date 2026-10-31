@@ -457,6 +457,7 @@ async def query(
         max_tokens=cfg.MAX_CONTEXT_TOKENS,
         history=history_payload or None,
         original_query=request.query,
+        rewrite_applied=rewrite_result.applied,
     )
     log.info(
         "Context assembled",
@@ -554,6 +555,7 @@ async def query(
         rewrite_applied=rewrite_result.applied,
         rewrite_method=rewrite_result.rewrite_method if rewrite_result.applied else None,
         rewrite_ms=rewrite_result.rewrite_ms,
+        rewrite_decision=rewrite_result.rewrite_decision,
         retrieval_mode=retrieval_mode,
         degraded=degraded if degraded else None,
     )

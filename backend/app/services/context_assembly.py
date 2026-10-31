@@ -130,6 +130,7 @@ def assemble_context(
     max_tokens: int | None = None,
     history: Optional[List[dict]] = None,
     original_query: Optional[str] = None,
+    rewrite_applied: bool = False,
 ) -> AssembledContext:
     """
     Assemble Top-K retrieved/reranked chunks into a grounded LLM prompt.
@@ -143,6 +144,9 @@ def assemble_context(
                          (defaults to settings.MAX_CONTEXT_TOKENS).
         history:         Optional conversation history (list of {role, content} dicts).
         original_query:  Optional original query wording from user.
+        rewrite_applied: True only when a rewrite was actually applied (applied=True
+                         from the rewriter). When False the prompt is byte-for-byte
+                         identical to the no-history prompt.
 
     Returns:
         AssembledContext with the full prompt and selected chunk list.
@@ -233,7 +237,7 @@ def assemble_context(
 
     evidence_block = "\n".join(evidence_parts)
 
-    if history:
+    if history and rewrite_applied:
         last_user_turn = None
         last_assistant_turn = None
         for turn in reversed(history):
@@ -260,6 +264,7 @@ def assemble_context(
             _QUESTION_LABEL
             + query.strip()
             + f'\n(Conversation context for interpreting question only - Original wording: "{orig_wording}")'
+            + "\nAnswer ONLY the current question. Do not repeat or restate earlier answers unless the question asks for them."
         )
 
         full_prompt = (

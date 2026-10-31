@@ -730,9 +730,10 @@ function TracePanel({
   standaloneQuery,
   retrievalMode,
   degraded,
+  rewriteApplied,
+  rewriteMethod,
 }) {
-  const isLexicalFallback = degraded || retrievalMode === 'lexical_fallback';
-  const stages = [
+  const isLexicalFallback = degraded || retrievalMode === 'lexical_fallback';  const stages = [
     {
       label: 'Embedding',
       ms: latency?.query_embed_ms,
@@ -750,7 +751,7 @@ function TracePanel({
 
   return (
     <div className="trace-panel">
-      {standaloneQuery && (
+      {rewriteApplied && standaloneQuery && (
         <div
           className="trace-section"
           style={{ paddingBottom: '10px', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}
@@ -766,7 +767,8 @@ function TracePanel({
             }}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap', paddingTop: '1px' }}>
-              <Sparkles size={12} style={{ opacity: 0.7 }} /> Interpreted as:
+              <Sparkles size={12} style={{ opacity: 0.7 }} />
+              {rewriteMethod === 'fallback_concat' ? 'Interpreted as (approximate):' : 'Interpreted as:'}
             </span>
             <em style={{ fontStyle: 'normal', color: 'var(--text-secondary, rgba(255,255,255,0.65))' }}>
               {standaloneQuery}
@@ -1680,9 +1682,11 @@ function QueryPageInner() {
                   costUsd={lastResult.cost_usd}
                   embedAttempts={lastResult.embed_attempts}
                   embedCacheHit={lastResult.embed_cache_hit}
-                  standaloneQuery={lastResult.standalone_query || null}
+                  standaloneQuery={lastResult.rewrite_applied ? (lastResult.standalone_query || null) : null}
                   retrievalMode={lastResult.retrieval_mode}
                   degraded={lastResult.degraded}
+                  rewriteApplied={lastResult.rewrite_applied}
+                  rewriteMethod={lastResult.rewrite_method}
                 />
                 )}
               </div>

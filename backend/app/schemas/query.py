@@ -192,11 +192,16 @@ class QueryResponse(BaseModel):
     )
     rewrite_method: Optional[str] = Field(
         default=None,
-        description="Method used for query rewriting: 'llm' or 'fallback_concat'",
+        description="Method used for query rewriting: 'none' | 'llm' | 'fallback_concat'",
     )
     rewrite_ms: float = Field(
         default=0.0,
         description="Time spent in the query rewriter in milliseconds",
+    )
+    # New additive optional telemetry fields (Design §6)
+    rewrite_decision: Optional[str] = Field(
+        default=None,
+        description="Classifier decision: 'standalone' | 'followup' | 'ambiguous'",
     )
 
     # ── Phase 3: degraded retrieval fields (additive, optional) ───────────────

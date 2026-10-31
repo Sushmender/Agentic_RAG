@@ -548,5 +548,101 @@ class TestFollowUpFallbackInPipeline:
         data = resp.json()
         assert data["rewrite_applied"] is True
         assert data["rewrite_method"] == "fallback_concat"
-        assert data["standalone_query"] == "What was the total revenue in Q3 and what drove it?"
+        assert data["standalone_query"] == "What was the total revenue in Q3 - and what drove it?"
+
+
+class TestStandaloneThroughQueryEndpoint:
+    """D. End-to-end with mocks through the query endpoint."""
+
+    def test_five_standalone_in_a_row_never_call_rewriter_llm(self):
+        standalone_questions = [
+            "What was the customer retention rate this year?",
+            "Which VP-level roles were hired in Q3?",
+            "Does this policy apply to contractors?",
+            "Who needs to approve an exception to the remote work policy?",
+            "What is the total revenue?",
+        ]
+        history = [
+            {"role": "user", "content": "Initial question?"},
+            {"role": "assistant", "content": "Initial answer."},
+        ]
+
+        patchers = make_all_patches()
+        rewriter_calls = []
+
+        async def tracked_groq(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                rewriter_calls.append(kwargs)
+                raise RuntimeError("Rewriter LLM must not be called for standalone questions")
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=tracked_groq):
+                with TestClient(app) as client:
+                    for q in standalone_questions:
+                        resp = client.post(
+                            "/api/v1/query",
+                            json={
+                                "query": q,
+                                "history": history,
+                            },
+                            headers=get_auth_headers(),
+                        )
+                        assert resp.status_code == 200, resp.text
+                        data = resp.json()
+                        assert data["rewrite_applied"] is False
+                        assert data["standalone_query"] is None
+                        assert data["rewrite_decision"] == "standalone"
+
+            assert len(rewriter_calls) == 0
+        finally:
+            for p in patchers:
+                p.stop()
+
+    def test_followup_after_standalones_is_rewritten_from_preceding_exchange(self):
+        patchers = make_all_patches()
+        rewriter_calls = []
+
+        async def mock_groq_gen(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                rewriter_calls.append(kwargs)
+                return {
+                    "content": "What drove the customer retention rate this year compared to previous years?",
+                    "input_tokens": 50,
+                    "output_tokens": 15,
+                    "total_tokens": 65,
+                    "cost_usd": 0.00001,
+                }
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=mock_groq_gen):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={
+                            "query": "and what drove it?",
+                            "history": [
+                                {"role": "user", "content": "What was the customer retention rate this year?"},
+                                {"role": "assistant", "content": "Customer retention was 92% this year."},
+                            ],
+                        },
+                        headers=get_auth_headers(),
+                    )
+                    assert resp.status_code == 200, resp.text
+                    data = resp.json()
+                    assert data["rewrite_applied"] is True
+                    assert data["rewrite_method"] == "llm"
+                    assert data["standalone_query"] == "What drove the customer retention rate this year compared to previous years?"
+                    assert len(rewriter_calls) == 1
+        finally:
+            for p in patchers:
+                p.stop()
+
 

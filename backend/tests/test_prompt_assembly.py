@@ -5,6 +5,8 @@ Unit tests for Phase D:
 - Evidence-only rule in system prompt
 - Answer rules (a, b, c) in system prompt
 - Small documents chunk expansion (<= 40 chunks -> max(top_k, 8))
+- C. Answer-prompt tests: conversation block gated on rewrite_applied
+- "Answer ONLY the current question" rule present when applied=True
 
 All tests use mocked inputs/providers; NO real requests are sent.
 """
@@ -68,8 +70,29 @@ def test_prompt_without_history_stays_unchanged():
     assert "\nQUESTION: What was the revenue growth?\n\nANSWER:" in prompt
 
 
+def test_prompt_with_history_but_rewrite_not_applied_same_as_no_history():
+    """When history is present but rewrite_applied=False, prompt is identical to no-history prompt."""
+    candidates = [_make_candidate("c1", "Sample passage text about revenue growth.")]
+    query = "What was the revenue growth?"
+    history = [
+        {"role": "user", "content": "Prior question"},
+        {"role": "assistant", "content": "Prior answer"},
+    ]
+
+    assembled_with_hist = assemble_context(
+        candidates=candidates, query=query, history=history,
+        original_query=query, rewrite_applied=False,
+    )
+    assembled_no_hist = assemble_context(
+        candidates=candidates, query=query, history=None,
+    )
+
+    assert assembled_with_hist.context_prompt == assembled_no_hist.context_prompt
+    assert "CONVERSATION CONTEXT" not in assembled_with_hist.context_prompt
+
+
 def test_prompt_with_history_includes_conversation_block_and_original_wording():
-    """When history exists, last exchange is labeled as conversation context for interpreting question only."""
+    """When history exists and rewrite_applied=True, last exchange is labeled as conversation context."""
     candidates = [_make_candidate("c1", "Northeast grew 9% due to increased local competition.")]
     standalone = "What drove the difference in growth between the Southeast and Northeast regions?"
     original = "and what drove it?"
@@ -83,6 +106,7 @@ def test_prompt_with_history_includes_conversation_block_and_original_wording():
         query=standalone,
         history=history,
         original_query=original,
+        rewrite_applied=True,
     )
     prompt = assembled.context_prompt
 
@@ -100,6 +124,9 @@ def test_prompt_with_history_includes_conversation_block_and_original_wording():
     assert f'Original wording: "{original}"' in prompt
     assert "for interpreting question only" in prompt.lower()
 
+    # "Answer ONLY" rule must be present
+    assert "Answer ONLY the current question" in prompt
+
 
 def test_prompt_with_history_truncates_to_last_exchange():
     """When multiple turns exist, only the most recent user and assistant exchange is included."""
@@ -116,6 +143,7 @@ def test_prompt_with_history_truncates_to_last_exchange():
         query="Follow-up standalone?",
         history=history,
         original_query="Follow up?",
+        rewrite_applied=True,
     )
     prompt = assembled.context_prompt
 
