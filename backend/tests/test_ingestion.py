@@ -15,11 +15,9 @@ Day 1 ingestion tests:
 from __future__ import annotations
 
 import io
-import time
 import uuid
 import zipfile
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -303,8 +301,8 @@ class TestGetJob:
         )
         assert resp.status_code == 404, resp.text
 
-    def test_get_job_403_for_wrong_user(self):
-        """User B cannot access User A's job."""
+    def test_get_job_404_for_wrong_user(self):
+        """User B cannot access User A's job (returns 404 to avoid revealing existence)."""
         token_a = _register_and_login()
         token_b = _register_and_login()
 
@@ -316,7 +314,7 @@ class TestGetJob:
             f"/api/v1/jobs/{job_id}",
             headers=_auth_headers(token_b),
         )
-        assert resp.status_code == 403, resp.text
+        assert resp.status_code == 404, resp.text
 
     def test_job_reaches_completed_or_processing(self):
         """
@@ -381,3 +379,43 @@ class TestGetJob:
         status = resp.json()["status"]
         assert status in ("completed", "processing", "pending"), \
             f"Unexpected status: {status}"
+
+
+class TestPageImageEndpoint:
+    """Tests for GET /documents/{id}/pages/{page}/image in-memory rendering."""
+
+    def test_page_image_renders_in_memory_and_sets_cache_control(self):
+        from pathlib import Path
+        import pymupdf
+
+        # Create a valid 1-page PDF
+        doc = pymupdf.open()
+        page = doc.new_page(width=300, height=300)
+        page.draw_rect([50, 50, 200, 200], color=(1, 0, 0), fill=(0, 1, 0))
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        token = _register_and_login()
+        upload_resp = _upload_pdf(token, content=pdf_bytes, filename="sample.pdf")
+        assert upload_resp.status_code == 202
+        doc_id = upload_resp.json()["document_id"]
+
+        # Request rendered page 0
+        resp = client.get(f"/api/v1/documents/{doc_id}/pages/0/image", headers=_auth_headers(token))
+        assert resp.status_code == 200
+        assert resp.headers.get("content-type") == "image/png"
+        assert resp.headers.get("cache-control") == "private, max-age=3600"
+        assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+        # Verify no on-disk page_cache was created
+        assert not Path("./data/page_cache").exists()
+
+        # Page out of range returns 404
+        resp_404 = client.get(f"/api/v1/documents/{doc_id}/pages/99/image", headers=_auth_headers(token))
+        assert resp_404.status_code == 404
+
+        # Another user cannot access the image
+        other_token = _register_and_login()
+        resp_forbidden = client.get(f"/api/v1/documents/{doc_id}/pages/0/image", headers=_auth_headers(other_token))
+        assert resp_forbidden.status_code == 404
+

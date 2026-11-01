@@ -1,0 +1,107 @@
+/* ============================================================
+   NotFoundPage.css
+   ============================================================ */
+.not-found {
+  min-height: 100vh;
+  background: var(--bg-base);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.not-found__content {
+  text-align: center;
+  z-index: 2;
+  position: relative;
+  padding: 40px;
+}
+
+.not-found__code {
+  font-size: 120px;
+  font-weight: 900;
+  line-height: 1;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  opacity: 0.8;
+  letter-spacing: -4px;
+}
+
+.not-found__title {
+  font-family: var(--font-heading);
+  font-size: var(--text-xl);
+  color: var(--text-primary);
+  margin-top: 12px;
+}
+
+.not-found__sub {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-top: 8px;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.7;
+}
+
+.not-found__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 32px;
+  flex-wrap: wrap;
+}
+
+.btn-nf {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 20px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  border: none;
+}
+
+.btn-nf--primary {
+  background: var(--accent);
+  color: #0B0F1A;
+  box-shadow: var(--glow-accent);
+}
+
+.btn-nf--primary:hover {
+  filter: brightness(1.1);
+  transform: translateY(-2px);
+}
+
+.btn-nf--secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.btn-nf--secondary:hover {
+  border-color: var(--border-hover);
+}
+
+/* Decorative grid */
+.not-found__grid {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: space-around;
+  opacity: 0.04;
+  pointer-events: none;
+}
+
+.not-found__grid-line {
+  width: 1px;
+  height: 100%;
+  background: var(--accent);
+}

@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List
 
-from pydantic import AnyUrl, Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    LOG_CONTEXT_DEBUG: bool = False
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
@@ -49,7 +50,7 @@ class Settings(BaseSettings):
     # ── OpenRouter ───────────────────────────────────────────────────────────
     OPENROUTER_API_KEY: str = Field(default="", description="OpenRouter API key")
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
-    EMBEDDING_MODEL: str = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+    EMBEDDING_MODEL: str = "nvidia/nemotron-3-embed-1b:free"
     RERANKER_MODEL: str = "nvidia/llama-nemotron-rerank-vl-1b-v2:free"
     FALLBACK_LLM_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
@@ -76,6 +77,8 @@ class Settings(BaseSettings):
     RERANK_TOP_K: int = 5
     MAX_CONTEXT_TOKENS: int = 8000
     EMBEDDING_BATCH_SIZE: int = 16
+    SMALL_DOC_CHUNK_LIMIT: int = 40
+    SMALL_DOC_CONTEXT_CHUNKS: int = 8
 
     # ── Upload limits ─────────────────────────────────────────────────────────
     MAX_UPLOAD_SIZE_MB: int = 50
@@ -88,6 +91,17 @@ class Settings(BaseSettings):
     RETRY_MAX_ATTEMPTS: int = 3
     RETRY_WAIT_SECONDS: float = 1.0
     TIMEOUT_SECONDS: float = 30.0
+
+    # ── Follow-up Query Rewriting ─────────────────────────────────────────────
+    REWRITE_ENABLED: bool = True
+    REWRITE_TIMEOUT_S: float = 2.5
+
+    # ── Query Embedding Resilience & Optimization ────────────────────────────
+    EMBED_QUERY_TIMEOUT_S: float = 4.0
+    EMBED_QUERY_MAX_ATTEMPTS: int = 2
+    EMBED_QUERY_BACKOFF_S: float = 0.5
+    EMBED_QUERY_HEDGE_AFTER_S: float = 1.5
+    EMBED_QUERY_HEDGE_ENABLED: bool = True
 
     # ── Allowed MIME types ───────────────────────────────────────────────────
     ALLOWED_MIME_TYPES: List[str] = [

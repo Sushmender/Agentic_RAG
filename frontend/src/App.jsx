@@ -1,18 +1,42 @@
 /**
  * frontend/src/App.jsx
  * Root app with React Router.
- * Routes: / → DocumentsPage, /query → QueryPage, /login → LoginPage, /register → RegisterPage
+ * Routes: / → DocumentsPage, /query → QueryPage,
+ *         /metrics → MetricsPage, /evaluation → EvaluationPage
+ *         /login → LoginPage, /register → RegisterPage
+ * D2: Error boundary, 404 page, lazy loading
  */
 
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import Navbar from './components/layout/Navbar';
-import DocumentsPage from './pages/DocumentsPage';
-import QueryPage from './pages/QueryPage';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import MetricsPage from './pages/MetricsPage';
-import EvaluationPage from './pages/EvaluationPage';
+import { ChatProvider } from './context/ChatContext';
+import AppShell from './components/layout/AppShell';
+import { ErrorBoundary } from './components/ErrorBoundary';
+
+// Route-level code splitting
+const DocumentsPage  = lazy(() => import('./pages/DocumentsPage'));
+const QueryPage      = lazy(() => import('./pages/QueryPage'));
+const LoginPage      = lazy(() => import('./pages/auth/LoginPage'));
+const RegisterPage   = lazy(() => import('./pages/auth/RegisterPage'));
+const MetricsPage    = lazy(() => import('./pages/MetricsPage'));
+const EvaluationPage = lazy(() => import('./pages/EvaluationPage'));
+const NotFoundPage   = lazy(() => import('./pages/NotFoundPage'));
+
+// Dev UI playground (dev only)
+const DevUIPage = import.meta.env.DEV ? lazy(() => import('./pages/DevUI')) : null;
+
+// Skeleton fallback for route Suspense
+function PageSkeleton() {
+  return (
+    <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {[1, 2, 3].map(i => (
+        <div key={i} className="skeleton" style={{ height: '80px', borderRadius: '10px' }} />
+      ))}
+    </div>
+  );
+}
 
 // Protected route wrapper
 function PrivateRoute({ children }) {
@@ -24,39 +48,64 @@ function AppRoutes() {
   const { isAuthenticated } = useAuth();
 
   return (
-    <div className="app">
-      {isAuthenticated && <Navbar />}
+    <Suspense fallback={<PageSkeleton />}>
       <Routes>
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
-        <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />} />
+        {/* Public routes */}
         <Route
-          path="/"
-          element={<PrivateRoute><DocumentsPage /></PrivateRoute>}
+          path="/login"
+          element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
         />
         <Route
-          path="/query"
-          element={<PrivateRoute><QueryPage /></PrivateRoute>}
+          path="/register"
+          element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />}
         />
+
+        {/* Dev route */}
         <Route
-          path="/metrics"
-          element={<PrivateRoute><MetricsPage /></PrivateRoute>}
+          path="/dev/ui"
+          element={DevUIPage ? <DevUIPage /> : <Navigate to="/" replace />}
         />
+
+        {/* Protected routes inside AppShell */}
         <Route
-          path="/evaluation"
-          element={<PrivateRoute><EvaluationPage /></PrivateRoute>}
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
+          element={
+            <PrivateRoute>
+              <AppShell />
+            </PrivateRoute>
+          }
+        >
+          <Route path="/"           element={<DocumentsPage />} />
+          <Route path="/query"      element={<QueryPage />} />
+          <Route path="/metrics"    element={<MetricsPage />} />
+          <Route path="/evaluation" element={<EvaluationPage />} />
+        </Route>
+
+        {/* 404 */}
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
-    </div>
+    </Suspense>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <ChatProvider>
+          <BrowserRouter>
+            <AppRoutes />
+            <Toaster
+              position="bottom-right"
+              theme="dark"
+              closeButton
+              offset="calc(var(--statusbar-height) + 16px)"
+              toastOptions={{
+                duration: 4000,
+              }}
+            />
+          </BrowserRouter>
+        </ChatProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }

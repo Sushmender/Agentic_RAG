@@ -9,9 +9,11 @@ Auth: Open (no JWT required) — admin/debug tooling like /metrics and /health.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.logging import get_logger
+from app.core.security import get_current_user_id
+from app.db.sqlite_store import document_store
 from app.evaluation.gold_dataset import load_or_generate
 from app.evaluation.evaluator import evaluate_pipeline
 from app.db.chromadb_client import get_collection_stats
@@ -29,10 +31,13 @@ router = APIRouter(prefix="/evaluation", tags=["Evaluation"])
         "retrieval + reranking pipeline for each question and computes "
         "Recall@K and Precision@K before and after reranking. "
         "Returns aggregate and per-question metrics. "
-        "No authentication required — this is an admin/observability endpoint."
+        "Requires authentication; retrieval is scoped to the caller's documents."
     ),
 )
-async def run_evaluation(k: int = 5) -> dict:
+async def run_evaluation(
+    k: int = 5,
+    user_id: str = Depends(get_current_user_id),
+) -> dict:
     """
     GET /evaluation/run?k=5
 
@@ -93,11 +98,19 @@ async def run_evaluation(k: int = 5) -> dict:
             },
         )
 
-    logger.info("Starting evaluation", k=k, gold_questions=len(gold_dataset))
+    # Resolve caller's own documents
+    user_docs = await document_store.list_for_user(user_id)
+    caller_doc_ids = [d.document_id for d in user_docs]
+
+    logger.info("Starting evaluation", k=k, gold_questions=len(gold_dataset), user_id=user_id)
 
     # Run evaluation
     try:
-        report = await evaluate_pipeline(gold_dataset=gold_dataset, k=k)
+        report = await evaluate_pipeline(
+            gold_dataset=gold_dataset,
+            k=k,
+            caller_document_ids=caller_doc_ids,
+        )
     except Exception as exc:
         logger.error("Evaluation pipeline failed", error=str(exc))
         raise HTTPException(

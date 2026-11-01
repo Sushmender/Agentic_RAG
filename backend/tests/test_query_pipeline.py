@@ -156,6 +156,30 @@ def make_all_patches(
     return patchers
 
 
+@pytest.fixture(autouse=True)
+def seed_test_user_document():
+    """Ensure test_user_001 owns doc_abc123 so full pipeline tests proceed past caller doc checks."""
+    import asyncio
+    from datetime import datetime, timezone
+    from app.db.sqlite_store import document_store
+    from app.schemas.document import DocumentMetadata, DocumentStatus, DocumentType
+
+    now = datetime.now(timezone.utc)
+    doc = DocumentMetadata(
+        document_id="doc_abc123",
+        user_id="test_user_001",
+        filename="test.pdf",
+        document_type=DocumentType.PDF,
+        mime_type="application/pdf",
+        file_size_bytes=1024,
+        status=DocumentStatus.COMPLETED,
+        created_at=now,
+        updated_at=now,
+    )
+    asyncio.run(document_store.save(doc))
+    yield
+
+
 @pytest.fixture()
 def auth_headers():
     return get_auth_headers()
@@ -175,7 +199,8 @@ class TestFullPipeline:
 
     def _query(self, payload=None):
         patchers = make_all_patches()
-        mocks = [p.start() for p in patchers]
+        for p in patchers:
+            p.start()
         try:
             with TestClient(app) as client:
                 resp = client.post(
@@ -454,3 +479,170 @@ class TestInputValidation:
                 json={"query": FAKE_QUERY},
             )
         assert resp.status_code == 401
+
+
+class TestEmbeddingFailure:
+    """Embedding failure handling in query endpoint."""
+
+    def test_embedding_failure_falls_back_gracefully_to_lexical(self):
+        mock_log = MagicMock()
+        with patch(
+            "app.api.v1.endpoints.query.embedding_provider.embed_query",
+            AsyncMock(side_effect=RuntimeError("Provider timed out after retries")),
+        ):
+            with patch("app.api.v1.endpoints.query.embedding_provider.get_last_query_meta", return_value={"attempts": 2, "cache_hit": False}):
+                with patch("app.api.v1.endpoints.query.logger.bind", return_value=mock_log):
+                    with TestClient(app) as client:
+                        resp = client.post(
+                            "/api/v1/query",
+                            json={"query": FAKE_QUERY},
+                            headers=get_auth_headers(),
+                        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["retrieval_mode"] == "lexical_fallback"
+        assert data["degraded"] is True
+        # Verify warning log format
+        mock_log.warning.assert_called_once()
+        args, kwargs = mock_log.warning.call_args
+        assert args[0] == "Query embedding failed, falling back to lexical retrieval"
+        assert kwargs["error_class"] == "RuntimeError"
+        assert kwargs["attempts"] == 2
+        assert "elapsed_ms" in kwargs
+        assert "Provider timed out" in kwargs["error"]
+
+
+class TestFollowUpFallbackInPipeline:
+    """Follow-up fallback query rewriting within query pipeline."""
+
+    def test_pipeline_uses_fallback_concat_when_rewrite_fails(self):
+        patchers = make_all_patches()
+        async def mock_groq_gen(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                raise RuntimeError("Groq timeout")
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=mock_groq_gen):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={
+                            "query": "and what drove it?",
+                            "history": [
+                                {"role": "user", "content": "What was the total revenue in Q3?"},
+                                {"role": "assistant", "content": "Revenue was $100M."},
+                            ],
+                        },
+                        headers=get_auth_headers(),
+                    )
+        finally:
+            for p in patchers:
+                p.stop()
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["rewrite_applied"] is True
+        assert data["rewrite_method"] == "fallback_concat"
+        assert data["standalone_query"] == "What was the total revenue in Q3 - and what drove it?"
+
+
+class TestStandaloneThroughQueryEndpoint:
+    """D. End-to-end with mocks through the query endpoint."""
+
+    def test_five_standalone_in_a_row_never_call_rewriter_llm(self):
+        standalone_questions = [
+            "What was the customer retention rate this year?",
+            "Which VP-level roles were hired in Q3?",
+            "Does this policy apply to contractors?",
+            "Who needs to approve an exception to the remote work policy?",
+            "What is the total revenue?",
+        ]
+        history = [
+            {"role": "user", "content": "Initial question?"},
+            {"role": "assistant", "content": "Initial answer."},
+        ]
+
+        patchers = make_all_patches()
+        rewriter_calls = []
+
+        async def tracked_groq(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                rewriter_calls.append(kwargs)
+                raise RuntimeError("Rewriter LLM must not be called for standalone questions")
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=tracked_groq):
+                with TestClient(app) as client:
+                    for q in standalone_questions:
+                        resp = client.post(
+                            "/api/v1/query",
+                            json={
+                                "query": q,
+                                "history": history,
+                            },
+                            headers=get_auth_headers(),
+                        )
+                        assert resp.status_code == 200, resp.text
+                        data = resp.json()
+                        assert data["rewrite_applied"] is False
+                        assert data["standalone_query"] is None
+                        assert data["rewrite_decision"] == "standalone"
+
+            assert len(rewriter_calls) == 0
+        finally:
+            for p in patchers:
+                p.stop()
+
+    def test_followup_after_standalones_is_rewritten_from_preceding_exchange(self):
+        patchers = make_all_patches()
+        rewriter_calls = []
+
+        async def mock_groq_gen(**kwargs):
+            if "Task: Rewrite the LAST USER question" in kwargs.get("prompt", ""):
+                rewriter_calls.append(kwargs)
+                return {
+                    "content": "What drove the customer retention rate this year compared to previous years?",
+                    "input_tokens": 50,
+                    "output_tokens": 15,
+                    "total_tokens": 65,
+                    "cost_usd": 0.00001,
+                }
+            return FAKE_LLM_RESPONSE_GROQ
+
+        try:
+            for p in patchers:
+                p.start()
+            from app.services.query_rewriter import groq_provider as rw_groq
+            with patch.object(rw_groq, "generate", side_effect=mock_groq_gen):
+                with TestClient(app) as client:
+                    resp = client.post(
+                        "/api/v1/query",
+                        json={
+                            "query": "and what drove it?",
+                            "history": [
+                                {"role": "user", "content": "What was the customer retention rate this year?"},
+                                {"role": "assistant", "content": "Customer retention was 92% this year."},
+                            ],
+                        },
+                        headers=get_auth_headers(),
+                    )
+                    assert resp.status_code == 200, resp.text
+                    data = resp.json()
+                    assert data["rewrite_applied"] is True
+                    assert data["rewrite_method"] == "llm"
+                    assert data["standalone_query"] == "What drove the customer retention rate this year compared to previous years?"
+                    assert len(rewriter_calls) == 1
+        finally:
+            for p in patchers:
+                p.stop()
+
+

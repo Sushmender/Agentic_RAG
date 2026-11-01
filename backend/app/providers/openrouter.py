@@ -53,13 +53,17 @@ class OpenRouterClient:
         self,
         endpoint: str,
         payload: dict[str, Any],
+        timeout: Optional[float | httpx.Timeout] = None,
     ) -> dict[str, Any]:
         """
         POST to an OpenRouter endpoint.
         Raises httpx.HTTPStatusError on non-2xx responses.
         """
         logger.debug("OpenRouter request", endpoint=endpoint, model=payload.get("model"))
-        response = await self.client.post(endpoint, json=payload)
+        kwargs: dict[str, Any] = {"json": payload}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        response = await self.client.post(endpoint, **kwargs)
         response.raise_for_status()
         return response.json()
 

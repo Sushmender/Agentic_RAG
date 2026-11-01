@@ -47,6 +47,15 @@ def test_health_has_components(client):
     assert "redis" in body["components"]
 
 
+def test_health_has_boot_id(client):
+    """Health response must have additive 'boot_id' field."""
+    response = client.get("/api/v1/health")
+    body = response.json()
+    assert "boot_id" in body
+    assert isinstance(body["boot_id"], str)
+    assert len(body["boot_id"]) > 0
+
+
 def test_health_head(client):
     """HEAD /health must work for uptime monitors."""
     response = client.head("/api/v1/health")

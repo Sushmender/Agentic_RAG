@@ -55,6 +55,8 @@ class EmbeddingCost(BaseModel):
     provider: str = "openrouter"
     token_count: int = 0
     cost_usd: float = 0.0
+    embed_cache_hit: bool = False
+    embed_attempts: int = 1
 
 
 class LLMCost(BaseModel):
@@ -98,6 +100,14 @@ class TelemetryRecord(BaseModel):
         default=False,
         description="True if answer was served from Redis cache",
     )
+    embed_cache_hit: bool = Field(
+        default=False,
+        description="True if query embedding was served from cache",
+    )
+    embed_attempts: int = Field(
+        default=1,
+        description="Number of provider attempts made for query embedding",
+    )
 
     # Ingestion-specific (empty/None for query records)
     document_id: Optional[str] = Field(
@@ -126,6 +136,14 @@ class StageLatency(BaseModel):
     ade_ms: float = 0.0
 
 
+class IngestionStats(BaseModel):
+    """Aggregated document ingestion metrics."""
+    documents_ingested: int = 0
+    avg_ade_ms: float = 0.0
+    median_ade_ms: float = 0.0
+    total_ade_credits: float = 0.0
+
+
 class MetricsResponse(BaseModel):
     """
     Aggregated metrics response from GET /metrics.
@@ -139,8 +157,12 @@ class MetricsResponse(BaseModel):
 
     # Latency
     avg_latency_ms: float = 0.0
+    p50_latency_ms: float = 0.0
+    median_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
     latency_by_stage: StageLatency = Field(default_factory=StageLatency)
+    median_latency_by_stage: StageLatency = Field(default_factory=StageLatency)
+    p50_latency_by_stage: StageLatency = Field(default_factory=StageLatency)
 
     # Tokens & cost
     total_tokens: int = 0
@@ -148,10 +170,32 @@ class MetricsResponse(BaseModel):
     total_embedding_cost_usd: float = 0.0
     total_llm_cost_usd: float = 0.0
 
-    # ADE
+    # ADE / Ingestion
     total_ade_credits: float = 0.0
+    ingestion_stats: IngestionStats = Field(default_factory=IngestionStats)
+    avg_ade_latency_ms: float = 0.0
+    median_ade_latency_ms: float = 0.0
 
     # Meta
     records_analyzed: int = 0
     oldest_record_ts: Optional[str] = None
     newest_record_ts: Optional[str] = None
+
+    # Recent queries list (P-4)
+    recent_queries: list[RecentQueryItem] = Field(default_factory=list)
+
+
+class RecentQueryItem(BaseModel):
+    """Recent query item for the Observability table and trace drawer."""
+    id: str
+    timestamp: Optional[str] = None
+    question: str = ""
+    model: str = ""
+    total_latency_ms: float = 0.0
+    cache_hit: bool = False
+    total_cost_usd: float = 0.0
+    embedding_ms: float = 0.0
+    retrieval_ms: float = 0.0
+    reranking_ms: float = 0.0
+    llm_ms: float = 0.0
+    ade_ms: float = 0.0

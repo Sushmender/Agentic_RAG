@@ -52,5 +52,6 @@ httpx==0.27.2
 # Code quality
 ruff==0.6.9
 
-# Document Parsing
+# Document Parsing & Rendering
 landingai-ade==1.18.0
+pymupdf==1.28.2

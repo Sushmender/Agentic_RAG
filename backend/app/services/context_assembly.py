@@ -17,8 +17,8 @@ Token budget note:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
+from typing import List, Optional
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -26,7 +26,6 @@ from app.schemas.query import RetrievalResult
 
 logger = get_logger(__name__)
 
-# ── HTML cleaning ──────────────────────────────────────────────────────────────
 _TAG_RE    = re.compile(r'<[^>]+>')
 _MULTI_WS  = re.compile(r'[ \t]{2,}')
 _MULTI_NL  = re.compile(r'\n{3,}')
@@ -54,12 +53,10 @@ def _html_table_to_markdown(table_html: str) -> str:
         | Marketing   | 220 | 195 | -25 |
     """
     rows = [_cells_from_row(r) for r in _ROW_RE.findall(table_html)]
-    # Drop empty rows
     rows = [r for r in rows if any(c for c in r)]
     if not rows:
         return ""
 
-    # Pad all rows to the same column count
     max_cols = max(len(r) for r in rows)
     rows = [r + [""] * (max_cols - len(r)) for r in rows]
 
@@ -86,32 +83,29 @@ def _clean_text(raw: str) -> str:
     This function is called at read-time only (context assembly,
     source preview, reranker input).
     """
-    # 1. Convert any HTML table blocks to markdown first
     def replace_table(m: re.Match) -> str:
         return "\n" + _html_table_to_markdown(m.group(0)) + "\n"
 
     text = _TABLE_RE.sub(replace_table, raw)
 
-    # 2. Unwrap ADE chart wrappers (<:: and ::> / : chart::>) so chart content is preserved
+    # Unwrap ADE chart wrappers (<:: and ::> / : chart::>) so chart content is preserved
     text = re.sub(r'<::', '', text)
     text = re.sub(r':?\s*[a-zA-Z ]*::>', '', text)
 
-    # 3. Strip remaining HTML tags (anchors, inline tags, etc.)
     text = _TAG_RE.sub(' ', text)
-
-    # 4. Normalise whitespace
     text = _MULTI_WS.sub(' ', text)
     text = _MULTI_NL.sub('\n\n', text)
     return text.strip()
 
 
-# ── System prompt template ─────────────────────────────────────────────────────
 _SYSTEM_PROMPT = (
     "You are a precise document assistant. "
-    "Answer ONLY using the provided evidence below. "
-    "Cite sources using [Source N] notation. "
-    "If the answer cannot be found in the evidence, say so explicitly. "
-    "Do NOT speculate or add information beyond the provided context."
+    "Answer ONLY using the provided evidence below. Previous answers are NOT evidence. "
+    "Keep answers concise and include citations using [Source N] notation on every claim.\n"
+    "Answer rules:\n"
+    "1. If a cited passage gives a reason or cause ('due to ...', 'driven by ...') for any item in the question, include it.\n"
+    "2. If the passages do not state exactly what was asked, say so in one sentence AND then give the closest relevant facts the passages DO state (related causes, drivers, figures), each cited.\n"
+    "3. Never invent causes or numbers. Do NOT speculate or add information beyond the provided context."
 )
 
 _EVIDENCE_HEADER = "EVIDENCE:\n"
@@ -134,17 +128,25 @@ def assemble_context(
     query: str,
     top_k: int | None = None,
     max_tokens: int | None = None,
+    history: Optional[List[dict]] = None,
+    original_query: Optional[str] = None,
+    rewrite_applied: bool = False,
 ) -> AssembledContext:
     """
     Assemble Top-K retrieved/reranked chunks into a grounded LLM prompt.
 
     Args:
-        candidates:  List of RetrievalResult — expected to be sorted by
-                     relevance_score descending (reranker output).
-        query:       The original user question.
-        top_k:       Max chunks to include (defaults to settings.RERANK_TOP_K).
-        max_tokens:  Max token budget for the evidence block
-                     (defaults to settings.MAX_CONTEXT_TOKENS).
+        candidates:      List of RetrievalResult — expected to be sorted by
+                         relevance_score descending (reranker output).
+        query:           The standalone user question (or original if not rewritten).
+        top_k:           Max chunks to include (defaults to settings.RERANK_TOP_K).
+        max_tokens:      Max token budget for the evidence block
+                         (defaults to settings.MAX_CONTEXT_TOKENS).
+        history:         Optional conversation history (list of {role, content} dicts).
+        original_query:  Optional original query wording from user.
+        rewrite_applied: True only when a rewrite was actually applied (applied=True
+                         from the rewriter). When False the prompt is byte-for-byte
+                         identical to the no-history prompt.
 
     Returns:
         AssembledContext with the full prompt and selected chunk list.
@@ -160,7 +162,6 @@ def assemble_context(
         query_preview=query[:80],
     )
 
-    # ── Step 1: Deduplicate by chunk_id ──────────────────────────────────────
     seen_ids: set[str] = set()
     unique: List[RetrievalResult] = []
     for chunk in candidates:
@@ -174,14 +175,13 @@ def assemble_context(
             removed=len(candidates) - len(unique),
         )
 
-    # ── Step 2: Token-budget enforcement ──────────────────────────────────────
     # Reserve ~500 tokens for question + answer preamble
     available_tokens = max_tokens - 500
     selected: List[RetrievalResult] = []
     tokens_used = 0
     truncated = False
 
-    for chunk in unique[:top_k]:  # Already sorted best-first
+    for chunk in unique[:top_k]:
         clean = _clean_text(chunk.text)
         chunk_tokens = max(1, len(clean) // 4)
         if tokens_used + chunk_tokens > available_tokens:
@@ -201,7 +201,6 @@ def assemble_context(
         top_chunk = unique[0]
         max_chars = available_tokens * 4
         truncated_text = top_chunk.text[:max_chars]
-        # Create a shallow copy with truncated text
         selected = [
             RetrievalResult(
                 chunk_id=top_chunk.chunk_id,
@@ -223,7 +222,6 @@ def assemble_context(
         truncated=truncated,
     )
 
-    # ── Step 3: Build evidence block ──────────────────────────────────────────
     evidence_parts: List[str] = [_EVIDENCE_HEADER]
 
     for i, chunk in enumerate(selected, start=1):
@@ -239,16 +237,53 @@ def assemble_context(
 
     evidence_block = "\n".join(evidence_parts)
 
-    # ── Step 4: Compose full prompt ───────────────────────────────────────────
-    full_prompt = (
-        evidence_block
-        + _QUESTION_LABEL
-        + query.strip()
-        + _ANSWER_LABEL
-    )
+    if history and rewrite_applied:
+        last_user_turn = None
+        last_assistant_turn = None
+        for turn in reversed(history):
+            role = turn.get("role", "") if isinstance(turn, dict) else getattr(turn, "role", "")
+            role_lower = str(role).strip().lower()
+            if role_lower == "assistant" and last_assistant_turn is None:
+                last_assistant_turn = turn.get("content", "") if isinstance(turn, dict) else getattr(turn, "content", "")
+            elif role_lower == "user" and last_user_turn is None:
+                last_user_turn = turn.get("content", "") if isinstance(turn, dict) else getattr(turn, "content", "")
+            if last_user_turn is not None and last_assistant_turn is not None:
+                break
 
-    # Add question tokens to estimate
-    total_tokens_est = tokens_used + len(query) // 4 + 150  # 150 for headers/labels
+        context_lines = [
+            "\nCONVERSATION CONTEXT (for interpreting the question ONLY; retrieved passages are the ONLY evidence and previous answers are NOT evidence):"
+        ]
+        if last_user_turn:
+            context_lines.append(f"Prior Question: {last_user_turn.strip()}")
+        if last_assistant_turn:
+            context_lines.append(f"Prior Answer: {last_assistant_turn.strip()}")
+        conversation_block = "\n".join(context_lines) + "\n"
+
+        orig_wording = original_query.strip() if original_query else query.strip()
+        question_block = (
+            _QUESTION_LABEL
+            + query.strip()
+            + f'\n(Conversation context for interpreting question only - Original wording: "{orig_wording}")'
+            + "\nAnswer ONLY the current question. Do not repeat or restate earlier answers unless the question asks for them."
+        )
+
+        full_prompt = (
+            evidence_block
+            + "\n"
+            + conversation_block
+            + question_block
+            + _ANSWER_LABEL
+        )
+    else:
+        # With no history the prompt must stay unchanged
+        full_prompt = (
+            evidence_block
+            + _QUESTION_LABEL
+            + query.strip()
+            + _ANSWER_LABEL
+        )
+
+    total_tokens_est = tokens_used + len(full_prompt) // 4
 
     return AssembledContext(
         context_prompt=full_prompt,

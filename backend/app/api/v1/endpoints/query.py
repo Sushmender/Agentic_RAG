@@ -1,22 +1,22 @@
 """
 backend/app/api/v1/endpoints/query.py
-Query endpoint — complete multimodal RAG pipeline (Day 5 + Day 6 cache).
+Query endpoint -- complete multimodal RAG pipeline (Day 5 + Day 6 cache).
 
 Full pipeline:
-  Cache check → Route → Embed query → Retrieve Top-N → Rerank Top-K
-  → Assemble context → Generate grounded answer → Cache store → Return QueryResponse
+  Cache check -> Route -> Embed query -> Retrieve Top-N -> Rerank Top-K
+  -> Assemble context -> Generate grounded answer -> Cache store -> Return QueryResponse
 
-Cache (Day 6):
-  - Check Redis before pipeline. If hit, return immediately with cache_hit=True.
-  - After generation, store result in Redis.
-  - Graceful degradation: if Redis is down, pipeline continues without caching.
-
-Reranker failure handling:
-  If the reranker fails, we log the error and fall back to raw retrieval
-  order (unranked Top-N -> assemble context -> still generate an answer).
+Phase 3 additions:
+  - Lexical fallback: when embed fails (or breaker is open), retrieve via BM25
+    from Chroma .get() and mark response as degraded.
+  - Circuit breaker: after 2 consecutive failures within 60 s, skip provider
+    for 60 s then allow a single probe.
+  - served_ms: cache-hit responses carry the actual serve latency.
+  - Degraded answers are NOT stored in the response cache.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import List, Optional
 
@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import get_current_user_id
+from app.db import chromadb_client
 from app.db.sqlite_store import document_store
 from app.providers.openrouter_embedding import embedding_provider
 from app.providers.openrouter_reranker import reranker_provider
@@ -38,8 +39,14 @@ from app.schemas.query import (
 )
 from app.services import cache_service, telemetry_service
 from app.services.context_assembly import assemble_context, _clean_text
+from app.services.embed_circuit_breaker import (
+    EmbedCircuitOpenError,
+    embed_circuit_breaker,
+)
+from app.services.lexical_retrieval import lexical_retrieve
 from app.services.llm_service import generate_answer
 from app.services.query_router import route_query
+from app.services.query_rewriter import rewrite_query
 from app.services.retrieval_service import (
     DEFAULT_TOP_N,
     retrieve_hybrid,
@@ -84,30 +91,113 @@ async def query(
     top_k = request.top_k or cfg.RERANK_TOP_K
     preferred_provider = (request.llm_provider or "groq").lower()
 
+    # ── Step 0a: Resolve caller documents and enforce ownership ───────────────
+    user_docs = await document_store.list_for_user(user_id)
+    caller_doc_ids = [d.document_id for d in user_docs]
+    caller_doc_ids_set = set(caller_doc_ids)
+
+    if not request.document_ids:
+        if not caller_doc_ids:
+            # Caller has no documents — return friendly answer without calling any provider
+            total_ms = round((time.monotonic() - pipeline_start) * 1000, 1)
+            return QueryResponse(
+                answer="Upload a document to get started",
+                sources=[],
+                route_type=route_query(request.query),
+                cache_hit=False,
+                embed_cache_hit=False,
+                embed_attempts=0,
+                model_used="",
+                provider_used="",
+                latency=LatencyBreakdown(
+                    total_ms=total_ms,
+                    cache_check_ms=0.0,
+                    query_embed_ms=0.0,
+                    retrieval_ms=0.0,
+                    reranking_ms=0.0,
+                    llm_ms=0.0,
+                ),
+                token_usage={},
+                cost_usd=0.0,
+            )
+        retrieval_doc_ids = caller_doc_ids
+    else:
+        for doc_id in request.document_ids:
+            if doc_id not in caller_doc_ids_set:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document not found",
+                )
+        retrieval_doc_ids = request.document_ids
+
     log = logger.bind(
         user_id=user_id,
         query_preview=request.query[:80],
         preferred_provider=preferred_provider,
         top_n=top_n,
         top_k=top_k,
+        retrieval_doc_ids=retrieval_doc_ids,
     )
     if request.document_ids:
         log = log.bind(document_ids=request.document_ids)
 
+    # Guard: warn if stored embedding model differs from current query model
+    stored_model = chromadb_client.get_stored_embedding_model()
+    if stored_model and stored_model != settings.EMBEDDING_MODEL:
+        logger.warning(
+            "EMBEDDING MODEL MISMATCH DETECTED ON QUERY: "
+            f"Stored collection embedding model '{stored_model}' differs from "
+            f"current query model '{settings.EMBEDDING_MODEL}'. "
+            "Retrieval quality may be degraded or inconsistent.",
+            stored_embedding_model=stored_model,
+            current_embedding_model=settings.EMBEDDING_MODEL,
+        )
+
     log.info("Query pipeline started")
 
-    # ── Step 0: Cache check (Day 6) ───────────────────────────────────────────
+    # ── Step 0a-pre: Rewrite follow-up query ─────────────────────────────────
+    # History is untrusted client data; used ONLY by the rewriter, never for
+    # document scoping or ownership checks.
+    history_payload = [
+        {"role": m.role, "content": m.content}
+        for m in (request.history or [])
+    ]
+    rewrite_result = await rewrite_query(
+        query=request.query,
+        history=history_payload or None,
+    )
+    standalone = rewrite_result.standalone_query  # may equal request.query
+
+    if rewrite_result.applied:
+        log = log.bind(
+            rewrite_applied=True,
+            standalone_preview=standalone[:80],
+        )
+
+    # ── Step 0b: Cache check (Day 6) ──────────────────────────────────────────
+    # Use standalone (rewritten) query as the cache key so follow-ups from
+    # different conversations don't collide with each other.
     cache_check_start = time.monotonic()
     cached = await cache_service.get_cached_response(
         user_id=user_id,
         document_ids=request.document_ids,
-        query=request.query,
+        query=standalone,
+        all_document_ids=caller_doc_ids,
     )
     cache_check_ms = round((time.monotonic() - cache_check_start) * 1000, 1)
+
 
     if cached is not None:
         log.info("Serving from cache", cache_check_ms=cache_check_ms)
         cached.latency.cache_check_ms = cache_check_ms
+        # Phase 3: stamp actual serve time so the UI shows real latency not original
+        cached.latency.served_ms = round((time.monotonic() - pipeline_start) * 1000, 1)
+        # Annotate with rewrite info even on cache hits
+        if rewrite_result.applied:
+            cached.standalone_query = standalone
+            cached.rewrite_applied = True
+            cached.rewrite_method = rewrite_result.rewrite_method
+            cached.rewrite_ms = rewrite_result.rewrite_ms
         
         # ── Append telemetry for cache hit ──────────────────────────────────
         from app.schemas.telemetry import (
@@ -151,31 +241,88 @@ async def query(
     log.info("Cache miss", cache_check_ms=cache_check_ms)
 
     # ── Step 1: Route ─────────────────────────────────────────────────────────
-    route = route_query(request.query)
+    route = route_query(standalone)   # route on the rewritten query
     log.info("Query routed", route=route.value)
 
-    # ── Step 2: Embed query ───────────────────────────────────────────────────
+    # ── Step 2: Embed query (circuit breaker + lexical fallback) ─────────────
     embed_start = time.monotonic()
+    query_embedding: Optional[List[float]] = None
+    embed_cache_hit = False
+    embed_attempts = 1
+    retrieval_mode = "vector"
+    degraded = False
+
     try:
-        query_embedding = await embedding_provider.embed_query(request.query)
+        if embed_circuit_breaker.is_open():
+            raise EmbedCircuitOpenError("Circuit breaker is OPEN (skipping provider call)")
+
+        query_embedding = await embedding_provider.embed_query(standalone)
+        embed_meta = (
+            embedding_provider.get_last_query_meta()
+            if hasattr(embedding_provider, "get_last_query_meta")
+            else {}
+        )
+        embed_cache_hit = embed_meta.get("cache_hit", False)
+        embed_attempts = embed_meta.get("attempts", 1)
+        embed_circuit_breaker.record_success()
     except Exception as exc:
-        log.error("Query embedding failed", error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Embedding provider error: {exc}",
-        ) from exc
+        embed_circuit_breaker.record_failure()
+        embed_ms = round((time.monotonic() - embed_start) * 1000, 1)
+        embed_meta = (
+            embedding_provider.get_last_query_meta()
+            if hasattr(embedding_provider, "get_last_query_meta")
+            else {}
+        )
+        embed_attempts = embed_meta.get(
+            "attempts", getattr(get_settings(), "EMBED_QUERY_MAX_ATTEMPTS", 1)
+        )
+        exc_class = type(exc).__name__
+        raw_msg = str(exc).strip()
+        msg = raw_msg or exc_class
+        if len(msg) > 200:
+            msg = msg[:200] + "..."
+        # Never log secrets or full URLs with keys
+        msg = re.sub(r'(api[_-]?key|token|secret|authorization|key)=[^&\s]+', r'\1=***', msg, flags=re.IGNORECASE)
+        msg = re.sub(r'https?://[^\s]+', '[url]', msg)
+
+        log.warning(
+            "Query embedding failed, falling back to lexical retrieval",
+            error_class=exc_class,
+            error=msg,
+            attempts=embed_attempts,
+            elapsed_ms=embed_ms,
+            circuit_state=embed_circuit_breaker.state.value,
+        )
+        retrieval_mode = "lexical_fallback"
+        degraded = True
+        query_embedding = None
+
     embed_ms = round((time.monotonic() - embed_start) * 1000, 1)
-    log.info("Query embedded", embed_ms=embed_ms)
+    log.info(
+        "Query embedding stage completed",
+        embed_ms=embed_ms,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
+        retrieval_mode=retrieval_mode,
+        degraded=degraded,
+    )
 
     # ── Step 3: Retrieve Top-N ────────────────────────────────────────────────
     retrieval_start = time.monotonic()
     try:
-        candidates: List[RetrievalResult] = _run_retrieval(
-            route=route,
-            query_embedding=query_embedding,
-            document_ids=request.document_ids,
-            top_n=top_n,
-        )
+        if retrieval_mode == "lexical_fallback" or query_embedding is None:
+            candidates: List[RetrievalResult] = lexical_retrieve(
+                query=standalone,
+                document_ids=retrieval_doc_ids or [],
+                top_n=top_n,
+            )
+        else:
+            candidates: List[RetrievalResult] = _run_retrieval(
+                route=route,
+                query_embedding=query_embedding,
+                document_ids=retrieval_doc_ids,
+                top_n=top_n,
+            )
     except Exception as exc:
         log.error("Retrieval failed", error=str(exc))
         raise HTTPException(
@@ -183,10 +330,11 @@ async def query(
             detail=f"Retrieval error: {exc}",
         ) from exc
     retrieval_ms = round((time.monotonic() - retrieval_start) * 1000, 1)
-    log.info("Retrieval complete", candidates=len(candidates), retrieval_ms=retrieval_ms)
+    log.info("Retrieval complete", candidates=len(candidates), retrieval_ms=retrieval_ms,
+             retrieval_mode=retrieval_mode)
 
     if not candidates:
-        # No chunks found — return early with informative message
+        # No chunks found -- return early with informative message
         total_ms = round((time.monotonic() - pipeline_start) * 1000, 1)
         return QueryResponse(
             answer=(
@@ -196,6 +344,8 @@ async def query(
             sources=[],
             route_type=route,
             cache_hit=False,
+            embed_cache_hit=embed_cache_hit,
+            embed_attempts=embed_attempts,
             model_used="",
             provider_used="",
             latency=LatencyBreakdown(
@@ -208,12 +358,42 @@ async def query(
             ),
             token_usage={},
             cost_usd=0.0,
+            retrieval_mode=retrieval_mode,
+            degraded=degraded if degraded else None,
         )
 
     # ── Step 4: Rerank Top-K ──────────────────────────────────────────────────
     rerank_start = time.monotonic()
     reranked_candidates: List[RetrievalResult]
     rerank_skipped = False
+
+    # Small documents check: if selected documents hold at most SMALL_DOC_CHUNK_LIMIT
+    # chunks in total, pass reranked top max(top_k, SMALL_DOC_CONTEXT_CHUNKS) chunks to LLM
+    total_selected_chunks = 0
+    if retrieval_doc_ids:
+        for did in retrieval_doc_ids:
+            doc_meta = await document_store.get(did)
+            if doc_meta and doc_meta.chunk_count:
+                total_selected_chunks += doc_meta.chunk_count
+            else:
+                try:
+                    c_res = chromadb_client.get_collection().get(where={"document_id": did}, include=[])
+                    total_selected_chunks += len(c_res.get("ids", []))
+                except Exception:
+                    pass
+
+    effective_top_k = top_k
+    if total_selected_chunks > 0 and total_selected_chunks <= cfg.SMALL_DOC_CHUNK_LIMIT:
+        effective_top_k = max(top_k, cfg.SMALL_DOC_CONTEXT_CHUNKS)
+        log.info(
+            "Small documents detected — expanding context chunks",
+            total_selected_chunks=total_selected_chunks,
+            chunk_limit=cfg.SMALL_DOC_CHUNK_LIMIT,
+            original_top_k=top_k,
+            effective_top_k=effective_top_k,
+        )
+
+    rerank_top_k = max(top_k, effective_top_k)
 
     try:
         # Convert RetrievalResult to dicts for the reranker.
@@ -231,11 +411,10 @@ async def query(
             for c in candidates
         ]
 
-
         reranked_dicts = await reranker_provider.rerank(
-            query=request.query,
+            query=standalone,
             candidates=candidate_dicts,
-            top_k=top_k,
+            top_k=rerank_top_k,
         )
 
         # Convert reranked dicts back to RetrievalResult (with updated scores)
@@ -264,8 +443,8 @@ async def query(
             error=str(exc),
             error_type=type(exc).__name__,
         )
-        # Fall back to raw retrieval, limit to top_k
-        reranked_candidates = candidates[:top_k]
+        # Fall back to raw retrieval, limit to rerank_top_k
+        reranked_candidates = candidates[:rerank_top_k]
         rerank_skipped = True
 
     rerank_ms = round((time.monotonic() - rerank_start) * 1000, 1)
@@ -273,9 +452,12 @@ async def query(
     # ── Step 5: Assemble grounded context ─────────────────────────────────────
     assembled = assemble_context(
         candidates=reranked_candidates,
-        query=request.query,
-        top_k=top_k,
+        query=standalone,
+        top_k=effective_top_k,
         max_tokens=cfg.MAX_CONTEXT_TOKENS,
+        history=history_payload or None,
+        original_query=request.query,
+        rewrite_applied=rewrite_result.applied,
     )
     log.info(
         "Context assembled",
@@ -284,12 +466,34 @@ async def query(
         truncated=assembled.chunks_truncated,
     )
 
+    # Phase B: Opt-in debug logging: see what the LLM sees
+    if cfg.LOG_CONTEXT_DEBUG:
+        selected_ids = {c.chunk_id for c in assembled.selected_chunks}
+        debug_chunks = [
+            {
+                "chunk_id": c.chunk_id,
+                "page": c.page,
+                "rerank_score": round(c.similarity_score, 4),
+                "text_preview": c.text[:80],
+                "in_context": c.chunk_id in selected_ids,
+            }
+            for c in reranked_candidates
+        ]
+        logger.info(
+            "Context debug (LOG_CONTEXT_DEBUG)",
+            standalone_query=standalone,
+            reranked_chunks=debug_chunks,
+            chunks_in_context=[c.chunk_id for c in assembled.selected_chunks],
+            total_reranked=len(reranked_candidates),
+            total_in_context=len(assembled.selected_chunks),
+        )
+
     # ── Step 6: Generate answer ───────────────────────────────────────────────
     llm_start = time.monotonic()
     try:
         llm_result = await generate_answer(
             assembled=assembled,
-            query=request.query,
+            query=standalone,
             preferred_provider=preferred_provider,
             max_tokens=1024,
         )
@@ -314,6 +518,7 @@ async def query(
         llm_ms=llm_ms,
         total_tokens=llm_result.total_tokens,
         cost_usd=llm_result.cost_usd,
+        rewrite_applied=rewrite_result.applied,
     )
 
     # ── Build sources (from selected chunks after context assembly) ────────────
@@ -328,6 +533,8 @@ async def query(
         sources=sources,
         route_type=route,
         cache_hit=False,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
         model_used=llm_result.model_used,
         provider_used=llm_result.provider_used,
         latency=LatencyBreakdown(
@@ -339,20 +546,32 @@ async def query(
             llm_ms=llm_ms,
         ),
         token_usage={
-            "input_tokens": llm_result.input_tokens,
-            "output_tokens": llm_result.output_tokens,
-            "total_tokens": llm_result.total_tokens,
+            "input_tokens": llm_result.input_tokens + rewrite_result.input_tokens,
+            "output_tokens": llm_result.output_tokens + rewrite_result.output_tokens,
+            "total_tokens": llm_result.total_tokens + rewrite_result.total_tokens,
         },
-        cost_usd=llm_result.cost_usd,
+        cost_usd=llm_result.cost_usd + rewrite_result.cost_usd,
+        standalone_query=standalone if rewrite_result.applied else None,
+        rewrite_applied=rewrite_result.applied,
+        rewrite_method=rewrite_result.rewrite_method if rewrite_result.applied else None,
+        rewrite_ms=rewrite_result.rewrite_ms,
+        rewrite_decision=rewrite_result.rewrite_decision,
+        retrieval_mode=retrieval_mode,
+        degraded=degraded if degraded else None,
     )
 
     # ── Step 7: Store in cache (Day 6) ──────────────────────────────────
-    await cache_service.set_cached_response(
-        user_id=user_id,
-        document_ids=request.document_ids,
-        query=request.query,
-        response=response,
-    )
+    # Degraded responses are NOT stored in response cache
+    if not degraded:
+        await cache_service.set_cached_response(
+            user_id=user_id,
+            document_ids=request.document_ids,
+            query=standalone,
+            response=response,
+            all_document_ids=caller_doc_ids,
+        )
+    else:
+        log.info("Skipping cache store for degraded response", retrieval_mode=retrieval_mode)
 
     # ── Step 8: Append telemetry (Day 7) ────────────────────────────────
     from app.schemas.telemetry import (
@@ -361,9 +580,11 @@ async def query(
     _tel = TelemetryRecord(
         record_type="query",
         user_id=user_id,
-        query_preview=request.query[:80],
+        query_preview=request.query[:80],   # always the original for telemetry
         route_type=route.value,
         cache_hit=False,
+        embed_cache_hit=embed_cache_hit,
+        embed_attempts=embed_attempts,
         latency=LatencyDetail(
             total_ms=total_ms,
             embedding_ms=embed_ms,
@@ -372,21 +593,23 @@ async def query(
             llm_ms=llm_ms,
         ),
         token_usage=TokenUsage(
-            input_tokens=llm_result.input_tokens,
-            output_tokens=llm_result.output_tokens,
-            total_tokens=llm_result.total_tokens,
+            input_tokens=llm_result.input_tokens + rewrite_result.input_tokens,
+            output_tokens=llm_result.output_tokens + rewrite_result.output_tokens,
+            total_tokens=llm_result.total_tokens + rewrite_result.total_tokens,
         ),
         embedding_cost=EmbeddingCost(
             model=settings.EMBEDDING_MODEL,
             provider="openrouter",
             cost_usd=0.0,
+            embed_cache_hit=embed_cache_hit,
+            embed_attempts=embed_attempts,
         ),
         llm_cost=LLMCost(
             model=llm_result.model_used,
             provider=llm_result.provider_used,
-            input_tokens=llm_result.input_tokens,
-            output_tokens=llm_result.output_tokens,
-            cost_usd=llm_result.cost_usd,
+            input_tokens=llm_result.input_tokens + rewrite_result.input_tokens,
+            output_tokens=llm_result.output_tokens + rewrite_result.output_tokens,
+            cost_usd=llm_result.cost_usd + rewrite_result.cost_usd,
         ),
     )
     await telemetry_service.append_record(_tel)

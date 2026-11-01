@@ -216,7 +216,6 @@ async def run_ingestion(
         )
 
         # ── Step 11: Append telemetry record ─────────────────────────────────
-        import time as _time
         from app.services import telemetry_service
         from app.schemas.telemetry import (
             TelemetryRecord, LatencyDetail, ADECredits, EmbeddingCost

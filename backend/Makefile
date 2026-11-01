@@ -3,8 +3,13 @@
 install:
 	.venv\Scripts\pip install -r requirements.txt
 
+HOST ?= 127.0.0.1
+PORT ?= 8000
+export HOST
+export PORT
+
 dev:
-	.venv\Scripts\uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	.venv\Scripts\python run.py
 
 test:
 	.venv\Scripts\pytest tests/ -v

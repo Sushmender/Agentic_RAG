@@ -29,19 +29,13 @@ async def get_job(
     job_id: str,
     user_id: str = Depends(get_current_user_id),
 ) -> JobResponse:
-    """Returns current job status. Raises 404 if job not found, 403 if not owned by user."""
+    """Returns current job status. Raises 404 if job not found or not owned by user."""
     job = await job_store.get(job_id)
 
-    if job is None:
+    if job is None or job.user_id != user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job '{job_id}' not found.",
-        )
-
-    if job.user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this job.",
         )
 
     return JobResponse(

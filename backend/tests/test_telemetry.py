@@ -15,13 +15,8 @@ Coverage:
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 
 from app.schemas.telemetry import (
     ADECredits,
@@ -191,10 +186,12 @@ class TestTelemetryService:
     async def test_append_error_does_not_raise(self, monkeypatch):
         """Telemetry failure must never propagate (fire-and-forget)."""
         # Make the file open fail
-        async def _bad_open(*args, **kwargs):
-            raise OSError("disk full")
+        from unittest.mock import MagicMock
 
-        monkeypatch.setattr("aiofiles.open", _bad_open)
+        monkeypatch.setattr(
+            "aiofiles.open",
+            MagicMock(side_effect=OSError("disk full")),
+        )
         # Should NOT raise
         await telemetry_service.append_record(_make_query_record())
 
@@ -281,13 +278,17 @@ class TestComputeMetrics:
 
 class TestMetricsEndpoint:
     @pytest.mark.asyncio
-    async def test_get_metrics_returns_200(self, isolated_telemetry_file):
-        """GET /metrics must return 200 with a MetricsResponse-shaped body."""
+    async def test_get_metrics_returns_200_with_auth(self, isolated_telemetry_file):
+        """GET /metrics must return 200 with a MetricsResponse-shaped body when authenticated."""
         from httpx import AsyncClient, ASGITransport
         from app.main import app
+        from app.core.security import create_access_token
+
+        token = create_access_token("user-test")
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/api/v1/metrics")
+            resp = await client.get("/api/v1/metrics", headers=headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -302,8 +303,8 @@ class TestMetricsEndpoint:
             assert key in data, f"Missing key: {key}"
 
     @pytest.mark.asyncio
-    async def test_get_metrics_no_auth_required(self, isolated_telemetry_file):
-        """GET /metrics must be accessible without a JWT token."""
+    async def test_get_metrics_unauthenticated_returns_401(self, isolated_telemetry_file):
+        """GET /metrics without a JWT token must return 401."""
         from httpx import AsyncClient, ASGITransport
         from app.main import app
 
@@ -311,23 +312,95 @@ class TestMetricsEndpoint:
             # No Authorization header
             resp = await client.get("/api/v1/metrics")
 
-        assert resp.status_code == 200
+        assert resp.status_code == 401
 
     @pytest.mark.asyncio
     async def test_get_metrics_with_real_data(self, isolated_telemetry_file):
-        """GET /metrics returns non-zero counts after telemetry records are appended."""
-        # Pre-populate telemetry
-        await telemetry_service.append_record(_make_query_record())
-        await telemetry_service.append_record(_make_ingestion_record())
+        """GET /metrics returns non-zero counts after telemetry records are appended for user."""
+        # Pre-populate telemetry for user-test
+        await telemetry_service.append_record(_make_query_record(user_id="user-test"))
+        await telemetry_service.append_record(_make_ingestion_record(user_id="user-test"))
 
         from httpx import AsyncClient, ASGITransport
         from app.main import app
+        from app.core.security import create_access_token
+
+        token = create_access_token("user-test")
+        headers = {"Authorization": f"Bearer {token}"}
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            resp = await client.get("/api/v1/metrics")
+            resp = await client.get("/api/v1/metrics", headers=headers)
 
         data = resp.json()
         assert data["query_count"] == 1
         assert data["ingestion_count"] == 1
         assert data["total_ade_credits"] == pytest.approx(3.0, rel=1e-3)
         assert data["records_analyzed"] == 2
+        assert "p50_latency_ms" in data
+        assert "median_latency_by_stage" in data
+        assert "ingestion_stats" in data
+
+    @pytest.mark.asyncio
+    async def test_p50_and_median_stage_latency(self, isolated_telemetry_file):
+        """p50 (median) latency and per-stage medians computed accurately."""
+        # Query 1: total 1000, emb 100, ret 50, rerank 150, llm 700
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=1000.0, embedding_ms=100.0, retrieval_ms=50.0, reranking_ms=150.0, llm_ms=700.0)
+        ))
+        # Query 2: total 2000, emb 200, ret 100, rerank 200, llm 1500
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=2000.0, embedding_ms=200.0, retrieval_ms=100.0, reranking_ms=200.0, llm_ms=1500.0)
+        ))
+        # Query 3: total 9000, emb 300, ret 150, rerank 250, llm 8300
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=9000.0, embedding_ms=300.0, retrieval_ms=150.0, reranking_ms=250.0, llm_ms=8300.0)
+        ))
+
+        m = await telemetry_service.compute_metrics()
+        assert m.p50_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.median_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.avg_latency_ms == pytest.approx(4000.0, rel=1e-3)
+
+        # Per-stage medians
+        assert m.median_latency_by_stage.embedding_ms == pytest.approx(200.0, rel=1e-3)
+        assert m.median_latency_by_stage.retrieval_ms == pytest.approx(100.0, rel=1e-3)
+        assert m.median_latency_by_stage.reranking_ms == pytest.approx(200.0, rel=1e-3)
+        assert m.median_latency_by_stage.llm_ms == pytest.approx(1500.0, rel=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_ingestion_separated_from_query(self, isolated_telemetry_file):
+        """Query stages and latency metrics must exclude ingestion ADE times, which are exposed via ingestion_stats."""
+        # 2 Queries
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=1000.0, embedding_ms=100.0, retrieval_ms=100.0, reranking_ms=100.0, llm_ms=700.0)
+        ))
+        await telemetry_service.append_record(_make_query_record(
+            latency=LatencyDetail(total_ms=3000.0, embedding_ms=300.0, retrieval_ms=200.0, reranking_ms=200.0, llm_ms=2300.0)
+        ))
+
+        # 3 Ingestions with heavy ADE times
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=10000.0, ade_ms=9000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=2.5)
+        ))
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=20000.0, ade_ms=19000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=3.5)
+        ))
+        await telemetry_service.append_record(_make_ingestion_record(
+            latency=LatencyDetail(total_ms=30000.0, ade_ms=29000.0, embedding_ms=1000.0),
+            ade_credits=ADECredits(per_ingestion=4.0)
+        ))
+
+        m = await telemetry_service.compute_metrics()
+        # Query latencies must NOT be inflated by ingestion records
+        assert m.query_count == 2
+        assert m.avg_latency_ms == pytest.approx(2000.0, rel=1e-3)
+        assert m.p50_latency_ms == pytest.approx(1000.0, rel=1e-3)
+
+        # Ingestion stats exposed separately
+        assert m.ingestion_stats.documents_ingested == 3
+        assert m.ingestion_stats.avg_ade_ms == pytest.approx(19000.0, rel=1e-3)
+        assert m.ingestion_stats.median_ade_ms == pytest.approx(19000.0, rel=1e-3)
+        assert m.ingestion_stats.total_ade_credits == pytest.approx(10.0, rel=1e-3)
+

@@ -101,14 +101,17 @@ def precision_at_k(
 async def evaluate_pipeline(
     gold_dataset: List[Dict[str, Any]],
     k: int = 5,
+    caller_document_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Run full retrieval + reranking evaluation against the gold dataset.
 
     Args:
-        gold_dataset: List of gold entries (question, expected_document_ids,
-                      expected_chunk_ids).
-        k:            Recall@K / Precision@K cut-off. Default: 5.
+        gold_dataset:        List of gold entries (question, expected_document_ids,
+                             expected_chunk_ids).
+        k:                   Recall@K / Precision@K cut-off. Default: 5.
+        caller_document_ids: Optional list of document IDs owned by the caller.
+                             If provided, retrieval is strictly scoped to these documents.
 
     Returns:
         Evaluation report with aggregate and per-question metrics.
@@ -119,8 +122,24 @@ async def evaluate_pipeline(
 
     per_question: List[Dict[str, Any]] = []
     top_n = DEFAULT_TOP_N  # how many candidates to retrieve before reranking
+    caller_set = set(caller_document_ids) if caller_document_ids is not None else None
 
-    for entry in gold_dataset:
+    # Check if caller has any documents matching gold questions
+    if caller_set is not None:
+        matching_entries = [
+            entry for entry in gold_dataset
+            if any(doc_id in caller_set for doc_id in entry.get("expected_document_ids", []))
+        ]
+        if not matching_entries:
+            report = _empty_report(k)
+            report["status"] = "no_gold_data"
+            report["message"] = "No evaluation questions match your documents yet"
+            return report
+        active_dataset = matching_entries
+    else:
+        active_dataset = gold_dataset
+
+    for entry in active_dataset:
         question = entry.get("question", "")
         expected_doc_ids: List[str] = entry.get("expected_document_ids", [])
         expected_chunk_ids: List[str] = entry.get("expected_chunk_ids", [])
@@ -136,16 +155,38 @@ async def evaluate_pipeline(
             continue
 
         # ── Step 2: Retrieve Top-N candidates (pre-rerank) ────────────────────
-        try:
-            candidates = retrieve_hybrid(
-                query_embedding=query_embedding,
-                document_ids=expected_doc_ids or None,
-                top_n=top_n,
-            )
-        except Exception as exc:
-            log.error("Retrieval failed for evaluation query", error=str(exc))
-            per_question.append(_failed_entry(entry, k, reason=str(exc)))
-            continue
+        # Determine allowed documents for retrieval (scoped to caller's documents)
+        if caller_set is not None:
+            if expected_doc_ids:
+                retrieval_doc_ids = [d for d in expected_doc_ids if d in caller_set]
+            else:
+                retrieval_doc_ids = list(caller_set)
+            
+            # If caller owns none of the target documents, skip retrieval to prevent cross-user leak
+            if not retrieval_doc_ids:
+                candidates = []
+            else:
+                try:
+                    candidates = retrieve_hybrid(
+                        query_embedding=query_embedding,
+                        document_ids=retrieval_doc_ids,
+                        top_n=top_n,
+                    )
+                except Exception as exc:
+                    log.error("Retrieval failed for evaluation query", error=str(exc))
+                    per_question.append(_failed_entry(entry, k, reason=str(exc)))
+                    continue
+        else:
+            try:
+                candidates = retrieve_hybrid(
+                    query_embedding=query_embedding,
+                    document_ids=expected_doc_ids or None,
+                    top_n=top_n,
+                )
+            except Exception as exc:
+                log.error("Retrieval failed for evaluation query", error=str(exc))
+                per_question.append(_failed_entry(entry, k, reason=str(exc)))
+                continue
 
         pre_ids = [c.chunk_id for c in candidates]
         pre_recall = recall_at_k(pre_ids, expected_chunk_ids, k)
@@ -230,6 +271,7 @@ async def evaluate_pipeline(
     )
 
     return {
+        "status": "completed",
         "k": k,
         "questions_evaluated": n,
         "pre_rerank": {

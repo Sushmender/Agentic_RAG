@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status, Response
+from fastapi.responses import FileResponse
 
 try:
     import magic as _magic  # type: ignore
@@ -368,6 +369,98 @@ async def get_chunk(
         bbox=chunk_data["bbox"],
         source=chunk_data["source"],
         parser_version=chunk_data["parser_version"],
+    )
+
+
+# ── Get page image preview (P-2) ─────────────────────────────────────────────
+@router.get(
+    "/{document_id}/pages/{page}/image",
+    summary="Get rendered page image for a document",
+    description="Renders PDF page as PNG with PyMuPDF in memory, or serves original image file.",
+)
+async def get_page_image(
+    document_id: str,
+    page: int,
+    user_id: str = Depends(get_current_user_id),
+):
+    doc = await document_store.get(document_id, user_id=user_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{document_id}' not found.",
+        )
+
+    upload_dir = settings.get_upload_dir() / document_id
+    file_path = upload_dir / doc.filename
+    if not file_path.exists():
+        files = [p for p in upload_dir.iterdir() if p.is_file()] if upload_dir.exists() else []
+        if files:
+            file_path = files[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Original document file not found.",
+            )
+
+    # 1. Image documents: serve original directly
+    if doc.document_type in (
+        DocumentType.PNG,
+        DocumentType.JPG,
+        DocumentType.WEBP,
+        DocumentType.TIFF,
+    ) or (doc.mime_type and doc.mime_type.startswith("image/")):
+        return FileResponse(file_path, media_type=doc.mime_type or "image/png")
+
+    # 2. PDF documents: render requested page in memory using PyMuPDF
+    if doc.document_type == DocumentType.PDF or file_path.suffix.lower() == ".pdf":
+        try:
+            import pymupdf
+        except ImportError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="PyMuPDF is not installed on the server.",
+            )
+
+        try:
+            pdf_doc = pymupdf.open(str(file_path))
+        except Exception as e:
+            logger.error("Failed to open PDF file", error=str(e), file_path=str(file_path))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to open PDF document: {str(e)}",
+            )
+
+        total_pages = len(pdf_doc)
+        if page < 0 or page >= total_pages:
+            pdf_doc.close()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Page {page} not found. Document has {total_pages} pages.",
+            )
+
+        try:
+            page_obj = pdf_doc[page]
+            pix = page_obj.get_pixmap(dpi=150)
+            img_bytes = pix.tobytes("png")
+        except Exception as e:
+            logger.error("Failed to render PDF page", page=page, error=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to render page {page}: {str(e)}",
+            )
+        finally:
+            pdf_doc.close()
+
+        return Response(
+            content=img_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    # 3. DOCX/PPTX/XLSX without converted PDF
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Page image preview is not available for this document format.",
     )
 
 
